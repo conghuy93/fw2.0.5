@@ -1,0 +1,11 @@
+# 📝 Commands to push to GitHub
+
+# Replace YOUR_USERNAME and REPO_NAME with your actual values
+git remote add origin https://github.com/YOUR_USERNAME/REPO_NAME.git
+
+# Push to GitHub
+git branch -M main
+git push -u origin main
+
+# Alternative: If you want to use SSH instead of HTTPS:
+# git remote add origin git@github.com:YOUR_USERNAME/REPO_NAME.git
