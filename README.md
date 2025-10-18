@@ -1,3 +1,38 @@
+# 🤖 Xiaozhi ESP32 Otto Robot - Enhanced Version
+
+**An enhanced ESP32-S3 firmware for Otto-style quadruped robot with improved movements, web controller, and Model Context Protocol (MCP) server integration.**
+
+## 🎯 Otto Robot Features
+
+### 🐾 Enhanced Robot Movements
+- **Softer Walking Motion**: Reduced angles from 30°/150° to 35°/145° for gentler movement
+- **Sitting Wave Action**: Wave hand gesture performed in proper sitting posture
+- **23 MCP Robot Tools**: Complete set of dog-style movements and actions
+
+### 🌐 Web Controller
+- Built-in WiFi Access Point: `Xiaozhi-ECF9`
+- Real-time robot control via web interface
+- Emoji display system with happy expressions
+
+### 🔧 Technical Specifications
+- **Platform**: ESP32-S3 (QFN56) with 16MB Flash, 8MB PSRAM
+- **Servo Configuration**: 4-servo quadruped setup (GPIO 17,18,12,38)
+- **Flash Usage**: Optimized with 11% free space (3.6MB used)
+
+## 🚀 Quick Start for Otto Robot
+
+```bash
+# Build firmware
+idf.py -B build_otto build
+
+# Flash to ESP32-S3
+esptool.py --chip esp32s3 -p COM24 -b 460800 write_flash 0x0 build_otto/xiaozhi-merged.bin
+```
+
+📚 **Full Otto Robot Documentation**: [README_OTTO_ROBOT.md](README_OTTO_ROBOT.md)
+
+---
+
 # An MCP-based Chatbot | 一个基于 MCP 的聊天机器人
 
 （中文 | [English](README_en.md) | [日本語](README_ja.md)）
