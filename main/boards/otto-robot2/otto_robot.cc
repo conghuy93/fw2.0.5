@@ -148,6 +148,17 @@ private:
             // Random number generator
             uint32_t random_val = esp_random();
             
+            // Array of emotions to choose from
+            const char* emotions[] = {
+                "happy",      // 0
+                "laughing",   // 1
+                "winking",    // 2
+                "cool",       // 3
+                "love",       // 4
+                "surprised",  // 5
+                "excited"     // 6 (if exists)
+            };
+            
             // Greet sequence function ID (will handle via queue)
             const int ACTION_GREET_SEQUENCE = 100;
             const int ACTION_CELEBRATE_SEQUENCE = 101;

@@ -16,6 +16,7 @@
 
 #include <cstring>
 #include <esp_log.h>
+#include <esp_netif.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
@@ -507,6 +508,24 @@ void Application::Start() {
                     
                 ESP_LOGI(TAG, "🎯 Shoot sequence match: %s", shoot_seq ? "YES ✅" : "NO ❌");
                 
+                // Check for instant action keywords
+                bool walk_forward = contains(lower, "đi tới") || contains(lower, "di toi") || 
+                                   contains(lower, "tiến lên") || contains(lower, "tien len");
+                bool walk_back = contains(lower, "lùi lại") || contains(lower, "lui lai") || 
+                                contains(lower, "đi lùi") || contains(lower, "di lui");
+                bool turn_left = contains(lower, "quẹo trái") || contains(lower, "queo trai") || 
+                                contains(lower, "rẽ trái") || contains(lower, "re trai");
+                bool turn_right = contains(lower, "quẹo phải") || contains(lower, "queo phai") || 
+                                 contains(lower, "rẽ phải") || contains(lower, "re phai");
+                bool sit_down = contains(lower, "ngồi xuống") || contains(lower, "ngoi xuong") || 
+                               contains(lower, "ngồi") || contains(lower, "ngoi");
+                bool dance = contains(lower, "nhảy") || contains(lower, "nhay") || 
+                            contains(lower, "múa") || contains(lower, "mua");
+                bool bow = contains(lower, "cúi chào") || contains(lower, "cui chao") || 
+                          contains(lower, "chào") || contains(lower, "chao");
+                bool show_ip = contains(lower, "192168") || contains(lower, "một chín hai") || 
+                              contains(lower, "mot chin hai") || contains(lower, "ip address");
+                
                 if (shoot_seq) {
                     ESP_LOGI(TAG, "🔫 EXECUTING shoot/defend sequence NOW! (No text display, only emoji)");
                     // Lock emotion IMMEDIATELY before Schedule
@@ -543,6 +562,94 @@ void Application::Start() {
                     });
                     ESP_LOGI(TAG, "✅ Shoot/defend sequence scheduled, returning now (no chat message)");
                     return; // handled - skip SetChatMessage
+                }
+                
+                // Instant action commands - execute immediately without LLM
+                if (walk_forward) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Walk Forward");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        otto_controller_queue_action(ACTION_DOG_WALK, 3, 150, 0, 0);
+                    });
+                    return;
+                }
+                if (walk_back) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Walk Back");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("neutral");
+                        otto_controller_queue_action(ACTION_DOG_WALK_BACK, 3, 150, 0, 0);
+                    });
+                    return;
+                }
+                if (turn_left) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Turn Left");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        otto_controller_queue_action(ACTION_DOG_TURN_LEFT, 3, 150, 0, 0);
+                    });
+                    return;
+                }
+                if (turn_right) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Turn Right");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        otto_controller_queue_action(ACTION_DOG_TURN_RIGHT, 3, 150, 0, 0);
+                    });
+                    return;
+                }
+                if (sit_down) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Sit Down");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("sleepy");
+                        otto_controller_queue_action(ACTION_DOG_SIT_DOWN, 1, 1000, 0, 0);
+                    });
+                    return;
+                }
+                if (dance) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Dance");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        otto_controller_queue_action(ACTION_DOG_DANCE, 3, 200, 0, 0);
+                    });
+                    return;
+                }
+                if (bow) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Bow");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        otto_controller_queue_action(ACTION_DOG_BOW, 1, 1500, 0, 0);
+                    });
+                    return;
+                }
+                if (show_ip) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Show WiFi IP Address");
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        disp->SetEmotion("happy");
+                        
+                        // Get IP address and display it
+                        esp_netif_ip_info_t ip_info;
+                        esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                        if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+                            char ip_str[64];
+                            snprintf(ip_str, sizeof(ip_str), "📱 IP: %d.%d.%d.%d", 
+                                     IP2STR(&ip_info.ip));
+                            ESP_LOGI("Application", "\033[1;33m🌟 Station IP: " IPSTR "\033[0m", 
+                                     IP2STR(&ip_info.ip));
+                            disp->SetChatMessage("system", ip_str);
+                        } else {
+                            ESP_LOGE("Application", "❌ Failed to get IP info");
+                            disp->SetChatMessage("system", "WiFi chưa kết nối!");
+                        }
+                    });
+                    return;
                 }
                 
                 // Show user's recognized speech (only if NOT a keyword trigger)

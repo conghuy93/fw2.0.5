@@ -28,6 +28,7 @@ private:
     // Idle management
     int idle_no_action_ticks_ = 0;    // seconds without actions (ActionTask polls every 1s)
     bool idle_mode_ = false;          // true when idle behavior is active
+    uint32_t idle_emoji_tick_ = 0;    // seconds since last emoji change in idle
 
     struct OttoActionParams {
         int action_type;
@@ -61,19 +62,15 @@ private:
         ACTION_BEND = 18,
         ACTION_HOME = 19,
         // Utility actions
-        ACTION_DELAY = 20,  // Delay in milliseconds, use 'speed' as delay duration
-        ACTION_DOG_JUMP_HAPPY = 21,  // Special: Jump with happy emoji (for touch sensor)
-        ACTION_DOG_ROLL_OVER = 23,  // New: Roll over movement
-        ACTION_DOG_PLAY_DEAD = 24  // New: Play dead movement
+        ACTION_DELAY = 20  // Delay in milliseconds, use 'speed' as delay duration
+        , ACTION_DOG_JUMP_HAPPY = 21  // Special: Jump with happy emoji (for touch sensor)
     };
 
     static void ActionTask(void* arg) {
         OttoController* controller = static_cast<OttoController*>(arg);
         OttoActionParams params;
         
-        ESP_LOGI(TAG, "🚀 ActionTask started! Attaching servos...");
-        controller->otto_.AttachServos();
-        ESP_LOGI(TAG, "✅ Servos attached successfully");
+        ESP_LOGI(TAG, "🚀 ActionTask started (servos already attached by Init)");
 
         while (true) {
             if (xQueueReceive(controller->action_queue_, &params, pdMS_TO_TICKS(1000)) == pdTRUE) {
@@ -81,14 +78,8 @@ private:
                          params.action_type, params.steps, params.speed);
                 controller->is_action_in_progress_ = true;
                 controller->idle_no_action_ticks_ = 0; // reset idle timer on new action
-                
-                // Exit idle mode and re-attach servos if needed
-                if (controller->idle_mode_) {
-                    ESP_LOGI(TAG, "🔌 Waking up from idle - re-attaching servos");
-                    controller->otto_.AttachServos();
-                    vTaskDelay(pdMS_TO_TICKS(50));  // Give servos time to stabilize
-                }
-                controller->idle_mode_ = false;
+                controller->idle_mode_ = false;        // exit idle mode on any action
+                controller->idle_emoji_tick_ = 0;
 
                 switch (params.action_type) {
                     // Dog-style movement actions
@@ -183,40 +174,6 @@ private:
                         ESP_LOGI(TAG, "🐕 WagTail: wags=%d, speed=%d", params.steps, params.speed);
                         controller->otto_.WagTail(params.steps, params.speed);
                         break;
-                    
-                    case ACTION_DOG_ROLL_OVER:
-                        {
-                            ESP_LOGI(TAG, "🔄 DogRollOver: rolls=%d, speed=%d", params.steps, params.speed);
-                            auto display = Board::GetInstance().GetDisplay();
-                            if (display) display->SetEmotion("excited");
-                            // Roll over sequence: lie down → swing side to side → lie down opposite → back to home
-                            controller->otto_.DogLieDown(1000);
-                            vTaskDelay(pdMS_TO_TICKS(500));
-                            controller->otto_.DogSwing(3, 10);  // Swing to simulate rolling
-                            vTaskDelay(pdMS_TO_TICKS(500));
-                            controller->otto_.DogLieDown(1000);
-                            vTaskDelay(pdMS_TO_TICKS(500));
-                            controller->otto_.Home();
-                            controller->otto_.WagTail(5, 100); // Happy tail wag after roll
-                            if (display) display->SetEmotion("happy");
-                        }
-                        break;
-                    
-                    case ACTION_DOG_PLAY_DEAD:
-                        {
-                            ESP_LOGI(TAG, "💀 DogPlayDead: duration=%d seconds", params.speed);
-                            auto display = Board::GetInstance().GetDisplay();
-                            if (display) display->SetEmotion("neutral");
-                            // Play dead: lie down and stay still for specified seconds
-                            controller->otto_.DogLieDown(1000);
-                            vTaskDelay(pdMS_TO_TICKS(params.speed * 1000));  // Stay dead for speed seconds
-                            // Wake up slowly
-                            controller->otto_.DogSitDown(800);
-                            vTaskDelay(pdMS_TO_TICKS(500));
-                            controller->otto_.Home();
-                            if (display) display->SetEmotion("happy");
-                        }
-                        break;
                         
                     // Legacy actions (adapted for 4 servos)
                     case ACTION_WALK:
@@ -264,18 +221,35 @@ private:
                 // No action received within 1 second -> idle tick
                 controller->idle_no_action_ticks_++;
 
+                // If in idle mode, periodically randomize emoji from a set
+                if (controller->idle_mode_) {
+                    controller->idle_emoji_tick_++;
+                    if (controller->idle_emoji_tick_ >= 10) { // change every ~10s
+                        controller->idle_emoji_tick_ = 0;
+                        const char* kIdleEmojis[] = {"happy", "winking", "cool", "sleepy", "surprised"};
+                        uint32_t r = esp_random();
+                        const char* chosen = kIdleEmojis[r % (sizeof(kIdleEmojis)/sizeof(kIdleEmojis[0]))];
+                        auto display = Board::GetInstance().GetDisplay();
+                        if (display) display->SetEmotion(chosen);
+                        ESP_LOGI(TAG, "🛌 Idle mode emoji -> %s", chosen);
+                    }
+                }
+
                 // Enter idle mode after 120s without actions
                 if (!controller->idle_mode_ && controller->idle_no_action_ticks_ >= 120) {
-                    ESP_LOGI(TAG, "🛌 Idle timeout reached (120s). Lying down.");
+                    ESP_LOGI(TAG, "🛌 Idle timeout reached (120s). Lying down and enabling idle emojis.");
                     controller->idle_mode_ = true;
+                    controller->idle_emoji_tick_ = 0;
 
                     // Move to lie down posture at a gentle pace
                     controller->otto_.DogLieDown(1500);
-                    
-                    // Detach servos to stop PWM - saves power and prevents servo jitter
-                    vTaskDelay(pdMS_TO_TICKS(500));  // Wait for movement to complete
-                    controller->otto_.DetachServos();
-                    ESP_LOGI(TAG, "💤 Servos detached - power saving mode activated");
+
+                    // Set an initial random emoji from the set
+                    const char* kIdleEmojis[] = {"happy", "winking", "cool", "sleepy", "surprised"};
+                    uint32_t r = esp_random();
+                    const char* chosen = kIdleEmojis[r % (sizeof(kIdleEmojis)/sizeof(kIdleEmojis[0]))];
+                    auto display = Board::GetInstance().GetDisplay();
+                    if (display) display->SetEmotion(chosen);
                 }
             }
         }

@@ -37,9 +37,6 @@ esp_err_t otto_status_handler(httpd_req_t *req);
 esp_err_t otto_emotion_handler(httpd_req_t *req);
 esp_err_t otto_emoji_mode_handler(httpd_req_t *req);
 esp_err_t otto_touch_sensor_handler(httpd_req_t *req);
-esp_err_t otto_screen_toggle_handler(httpd_req_t *req);
-esp_err_t otto_wake_up_handler(httpd_req_t *req);
-esp_err_t otto_forget_wifi_handler(httpd_req_t *req);
 
 // Otto action constants
 #define ACTION_DOG_WALK            1
@@ -57,8 +54,6 @@ esp_err_t otto_forget_wifi_handler(httpd_req_t *req);
 #define ACTION_DOG_STRETCH         13
 #define ACTION_DOG_SCRATCH         14  // New: Sit + BR leg wave (gãi ngứa)
 #define ACTION_DOG_WAG_TAIL        22  // New: Wag tail movement
-#define ACTION_DOG_ROLL_OVER       23  // New: Roll over movement
-#define ACTION_DOG_PLAY_DEAD       24  // New: Play dead movement
 #define ACTION_WALK                15
 #define ACTION_TURN                16
 #define ACTION_JUMP                17

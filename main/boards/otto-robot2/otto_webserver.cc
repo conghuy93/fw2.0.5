@@ -1,11 +1,10 @@
-﻿#include "otto_webserver.h"
+#include "otto_webserver.h"
 #include "mcp_server.h"
 #include "application.h"
 #include "otto_emoji_display.h"
 #include "board.h"
 #include <cJSON.h>
 #include <stdio.h>
-#include <nvs_flash.h>
 
 extern "C" {
 
@@ -19,14 +18,6 @@ static int s_retry_num = 0;
 // Auto pose change variables
 static bool auto_pose_enabled = false;
 static TimerHandle_t auto_pose_timer = NULL;
-static uint32_t auto_pose_interval_ms = 60000;  // Default 60 seconds
-static char selected_poses[200] = "sit,jump,wave,bow,stretch,swing,dance";  // Default all
-
-// Auto emoji change variables
-static bool auto_emoji_enabled = false;
-static TimerHandle_t auto_emoji_timer = NULL;
-static uint32_t auto_emoji_interval_ms = 10000;  // Default 10 seconds
-static char selected_emojis[300] = "happy,laughing,winking,cool,love,surprised,excited,sleepy,sad,angry,confused,thinking,neutral,shocked";  // Default all
 
 // Timer callback for auto pose change
 void auto_pose_timer_callback(TimerHandle_t xTimer) {
@@ -34,97 +25,35 @@ void auto_pose_timer_callback(TimerHandle_t xTimer) {
         return;
     }
     
-    // Pose action structure
+    // List of poses with their optimal parameters (action, steps, speed)
+    static int pose_index = 0;
+    
     struct PoseAction {
-        const char* name;
         int action;
         int steps;
         int speed;
     };
     
-    // All available poses
-    const PoseAction all_poses[] = {
-        {"sit", ACTION_DOG_SIT_DOWN, 1, 500},
-        {"jump", ACTION_DOG_JUMP, 1, 200},
-        {"wave", ACTION_DOG_WAVE_RIGHT_FOOT, 3, 50},
-        {"bow", ACTION_DOG_BOW, 1, 1500},
-        {"stretch", ACTION_DOG_STRETCH, 2, 15},
-        {"swing", ACTION_DOG_SWING, 3, 10},
-        {"dance", ACTION_DOG_DANCE, 2, 200}
+    const PoseAction poses[] = {
+        {ACTION_DOG_SIT_DOWN, 1, 500},        // Sit down smoothly
+        {ACTION_DOG_JUMP, 1, 200},            // Quick jump
+        {ACTION_DOG_WAVE_RIGHT_FOOT, 3, 50},  // Fast wave
+        {ACTION_DOG_BOW, 1, 1500},            // Slow bow (show respect)
+        {ACTION_DOG_STRETCH, 2, 15},          // Quick stretch
+        {ACTION_DOG_SWING, 3, 10},            // Fast swing
+        {ACTION_DOG_DANCE, 2, 200}            // Energetic dance
     };
-    const int total_poses = sizeof(all_poses) / sizeof(all_poses[0]);
+    const int num_poses = sizeof(poses) / sizeof(poses[0]);
     
-    // Build list of enabled poses
-    PoseAction enabled_poses[7];
-    int enabled_count = 0;
-    
-    for (int i = 0; i < total_poses; i++) {
-        if (strstr(selected_poses, all_poses[i].name) != NULL) {
-            enabled_poses[enabled_count++] = all_poses[i];
-        }
-    }
-    
-    if (enabled_count == 0) {
-        ESP_LOGW(TAG, "⚠️ No poses selected for auto mode");
-        return;
-    }
-    
-    // Get next pose (cycle through enabled poses)
-    static int pose_index = 0;
-    if (pose_index >= enabled_count) pose_index = 0;
-    
-    const PoseAction& current = enabled_poses[pose_index];
+    // Queue only the pose action (no HOME after)
+    const PoseAction& current = poses[pose_index];
     otto_controller_queue_action(current.action, current.steps, current.speed, 0, 0);
     
-    ESP_LOGI(TAG, "🤖 Auto pose change [%d/%d]: %s (action=%d, steps=%d, speed=%d)", 
-             pose_index + 1, enabled_count, current.name, current.action, current.steps, current.speed);
+    ESP_LOGI(TAG, "🤖 Auto pose change: action %d (steps=%d, speed=%d)", 
+             current.action, current.steps, current.speed);
     
     // Move to next pose
-    pose_index = (pose_index + 1) % enabled_count;
-}
-
-// Timer callback for auto emoji change - OPTIMIZED to reduce stack usage
-void auto_emoji_timer_callback(TimerHandle_t xTimer) {
-    if (!auto_emoji_enabled) {
-        return;
-    }
-    
-    // Static list to avoid stack allocation
-    static const char* all_emojis[] = {
-        "happy", "laughing", "winking", "cool", "love", 
-        "surprised", "excited", "sleepy", "sad", "angry", 
-        "confused", "thinking", "neutral", "shocked"
-    };
-    static const int total_emojis = 14;
-    static int emoji_index = 0;
-    
-    // Find next enabled emoji (simple iteration, no array building)
-    int checked = 0;
-    const char* current_emoji = nullptr;
-    
-    while (checked < total_emojis && current_emoji == nullptr) {
-        if (emoji_index >= total_emojis) emoji_index = 0;
-        
-        if (strstr(selected_emojis, all_emojis[emoji_index]) != nullptr) {
-            current_emoji = all_emojis[emoji_index];
-        }
-        
-        emoji_index++;
-        checked++;
-    }
-    
-    if (current_emoji == nullptr) {
-        ESP_LOGW(TAG, "⚠️ No emojis selected for auto mode");
-        emoji_index = 0;
-        return;
-    }
-    
-    // Set emoji on display - keep it simple
-    auto display = Board::GetInstance().GetDisplay();
-    if (display) {
-        display->SetEmotion(current_emoji);
-        ESP_LOGI(TAG, "😊 Auto emoji: %s", current_emoji);
-    }
+    pose_index = (pose_index + 1) % num_poses;
 }
 
 // WiFi event handler for monitoring system WiFi connection
@@ -268,7 +197,7 @@ void send_otto_control_page(httpd_req_t *req) {
     // Modern responsive HTML with Otto Robot theme
     httpd_resp_sendstr_chunk(req, "<!DOCTYPE html><html><head><meta charset='UTF-8'>");
     httpd_resp_sendstr_chunk(req, "<meta name='viewport' content='width=device-width, initial-scale=1.0, user-scalable=no'>");
-    httpd_resp_sendstr_chunk(req, "<title>Kiki Control - miniZ</title>");
+    httpd_resp_sendstr_chunk(req, "<title>Dog Master - miniZ</title>");
     
     // CSS Styling - Optimized for Mobile
     httpd_resp_sendstr_chunk(req, "<style>");
@@ -298,18 +227,6 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, ".auto-toggle { background: #e8f5e9; border: 2px solid #4caf50; padding: 12px; border-radius: 10px; margin: 15px 0; text-align: center; }");
     httpd_resp_sendstr_chunk(req, ".toggle-btn { background: #ffffff; border: 2px solid #000; padding: 10px 20px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; }");
     httpd_resp_sendstr_chunk(req, ".toggle-btn.active { background: #4caf50; color: white; border-color: #2e7d32; }");
-    // Page navigation styling
-    httpd_resp_sendstr_chunk(req, ".page { display: none; }");
-    httpd_resp_sendstr_chunk(req, ".page.active { display: block; }");
-    httpd_resp_sendstr_chunk(req, ".nav-tabs { display: flex; gap: 10px; margin-bottom: 20px; }");
-    httpd_resp_sendstr_chunk(req, ".nav-tab { flex: 1; background: #f0f0f0; border: 2px solid #000; padding: 12px; border-radius: 10px; text-align: center; font-weight: bold; cursor: pointer; transition: all 0.2s; }");
-    httpd_resp_sendstr_chunk(req, ".nav-tab.active { background: #4caf50; color: white; border-color: #2e7d32; }");
-    // Auto pose config styling
-    httpd_resp_sendstr_chunk(req, ".pose-config { background: #f8f8f8; border: 2px solid #000; border-radius: 10px; padding: 15px; margin: 10px 0; }");
-    httpd_resp_sendstr_chunk(req, ".pose-item { display: flex; align-items: center; gap: 10px; margin: 8px 0; padding: 8px; background: white; border-radius: 8px; border: 1px solid #ddd; }");
-    httpd_resp_sendstr_chunk(req, ".pose-item input[type='checkbox'] { width: 20px; height: 20px; cursor: pointer; }");
-    httpd_resp_sendstr_chunk(req, ".pose-item label { flex: 1; cursor: pointer; font-weight: 500; }");
-    httpd_resp_sendstr_chunk(req, ".time-input { width: 80px; padding: 5px; border: 2px solid #000; border-radius: 5px; font-weight: bold; text-align: center; }");
     
     // Compact fun actions grid
     httpd_resp_sendstr_chunk(req, ".fun-actions { margin-top: 15px; }");
@@ -318,7 +235,7 @@ void send_otto_control_page(httpd_req_t *req) {
     // Compact emoji sections
     httpd_resp_sendstr_chunk(req, ".emoji-section, .emoji-mode-section { margin-top: 15px; }");
     httpd_resp_sendstr_chunk(req, ".emoji-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }");
-    httpd_resp_sendstr_chunk(req, ".mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }");
+    httpd_resp_sendstr_chunk(req, ".mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }");
     httpd_resp_sendstr_chunk(req, ".emoji-btn { background: #fff8e1; border: 2px solid #ff6f00; color: #e65100; padding: 10px; font-size: 13px; }");
     httpd_resp_sendstr_chunk(req, ".emoji-btn:hover { background: #ffecb3; border-color: #e65100; }");
     httpd_resp_sendstr_chunk(req, ".mode-btn { background: #e8f5e8; border: 2px solid #4caf50; color: #2e7d32; padding: 12px 16px; }");
@@ -341,19 +258,10 @@ void send_otto_control_page(httpd_req_t *req) {
     // HTML Content
     httpd_resp_sendstr_chunk(req, "<div class='container'>");
     httpd_resp_sendstr_chunk(req, "<div class='header'>");
-    httpd_resp_sendstr_chunk(req, "<h1 style='margin: 0 0 10px 0;'>🐕 Kiki Control</h1>");
+    httpd_resp_sendstr_chunk(req, "<h1 style='margin: 0 0 10px 0;'>🐕 Dog Master</h1>");
     httpd_resp_sendstr_chunk(req, "<div style='font-size: 0.9em; color: #666; font-style: italic; margin-bottom: 15px;'>by miniZ</div>");
     httpd_resp_sendstr_chunk(req, "<div class='status' id='status'>🟢 Sẵn Sàng Điều Khiển</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Navigation Tabs
-    httpd_resp_sendstr_chunk(req, "<div class='nav-tabs'>");
-    httpd_resp_sendstr_chunk(req, "<div class='nav-tab active' onclick='showPage(1)' id='tab1'>🎮 Điều Khiển</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='nav-tab' onclick='showPage(2)' id='tab2'>😊 Cảm Xúc & Cài Đặt</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Page 1: Main Controls
-    httpd_resp_sendstr_chunk(req, "<div class='page active' id='page1'>");
     
     // Movement Controls
     httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
@@ -397,56 +305,51 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_search\", 1, 500)'>🔍 Tìm Kiếm</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // New Special Actions section
-    httpd_resp_sendstr_chunk(req, "<div class='fun-actions'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🎪 Hành Động Đặc Biệt</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='action-grid'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_roll_over\", 1, 200)'>🔄 Lăn Qua Lăn Lại</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_play_dead\", 5, 0)'>💀 Giả Chết</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // ALL EMOJI Section on Page 1
-    httpd_resp_sendstr_chunk(req, "<div class='emoji-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>😊 TẤT CẢ EMOJI</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='emoji-grid'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"happy\")'> Vui</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"sad\")'>😢 Buồn</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"angry\")'> Giận</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"surprised\")'>😮 Ngạc Nhiên</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"love\")'>😍 Yêu</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"sleepy\")'>😴 Buồn Ngủ</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"confused\")'>😕 Bối Rối</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"excited\")'>🤩 Phấn Khích</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"neutral\")'> Bình Thường</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"thinking\")'>🤔 Suy Nghĩ</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"wink\")'> Nháy Mắt</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"cool\")'> Ngầu</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"laughing\")'> Cười To</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"crying\")'> Khóc</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"crazy\")'>🤪 Điên</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"shocked\")'>😱 Sốc</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"winking\")'> Nháy Mắt Lém</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Response area for Page 1
-    httpd_resp_sendstr_chunk(req, "<div class='response' id='response'>Ready for commands...</div>");
-    httpd_resp_sendstr_chunk(req, "</div>"); // End Page 1
-    
-    // Page 2: Settings & Configuration
-    httpd_resp_sendstr_chunk(req, "<div class='page' id='page2'>");
 
     // Volume Control Section
     httpd_resp_sendstr_chunk(req, "<div class='volume-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>� Điều Chỉnh Âm Lượng</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🔊 Điều Chỉnh Âm Lượng</div>");
     httpd_resp_sendstr_chunk(req, "<div style='background: linear-gradient(145deg, #f8f8f8, #ffffff); border: 2px solid #000000; border-radius: 15px; padding: 20px; margin-bottom: 20px;'>");
     httpd_resp_sendstr_chunk(req, "<div style='display: flex; align-items: center; gap: 15px; flex-wrap: wrap;'>");
     httpd_resp_sendstr_chunk(req, "<span style='font-weight: bold; color: #000; min-width: 80px;'>🔈 Âm lượng:</span>");
     httpd_resp_sendstr_chunk(req, "<input type='range' id='volumeSlider' min='0' max='100' value='50' style='flex: 1; min-width: 200px; height: 8px; background: linear-gradient(145deg, #e0e0e0, #f0f0f0); border-radius: 5px; outline: none; -webkit-appearance: none;'>");
     httpd_resp_sendstr_chunk(req, "<span id='volumeValue' style='font-weight: bold; color: #000; min-width: 50px;'>50%</span>");
     httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    
+    // Otto Emoji Controls
+    httpd_resp_sendstr_chunk(req, "<div class='emoji-section'>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🤖 Cảm Xúc Robot Otto</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='emoji-grid'>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"happy\")'>😊 Vui</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"sad\")'>😢 Buồn</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"angry\")'>😠 Giận</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"surprised\")'>😮 Ngạc Nhiên</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"love\")'>😍 Yêu</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"sleepy\")'>😴 Buồn Ngủ</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"confused\")'>😕 Bối Rối</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"excited\")'>🤩 Phấn Khích</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"neutral\")'>😐 Bình Thường</button>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    
+    // Otto Emoji Restore Section (Most Prominent)
+    httpd_resp_sendstr_chunk(req, "<div class='emoji-mode-section'>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🤖 Otto Robot Emotions</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='mode-grid'>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn active' onclick='setEmojiMode(true)' id='otto-mode' style='background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border-color: #2e7d32; font-size: 18px; font-weight: bold;'>🤖 OTTO GIF MODE (ACTIVE)</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setEmojiMode(false)' id='default-mode'>😊 Twemoji Text Mode</button>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='emoji-grid' style='margin-top: 15px;'>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"happy\")'>😊 Happy</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"wink\")'>😉 Wink</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"cool\")'>😎 Cool</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"thinking\")'>🤔 Thinking</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"laughing\")'>😂 Laughing</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"crying\")'>😭 Crying</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"crazy\")'>🤪 Crazy</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"angry\")'>😠 Angry</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
     
@@ -458,114 +361,17 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setTouchSensor(false)' id='touch-off' style='background: linear-gradient(145deg, #f44336, #e57373); color: white; border-color: #c62828; font-size: 16px; font-weight: bold;'>🚫 TẮT Cảm Biến Chạm</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
-    httpd_resp_sendstr_chunk(req, "Khi BẬT: chạm vào cảm biến → robot nhảy + emoji cười<br>");
+    httpd_resp_sendstr_chunk(req, "Khi BẬT: chạm vào cảm biến -> robot nhảy + emoji cười<br>");
     httpd_resp_sendstr_chunk(req, "Khi TẮT: chạm vào cảm biến không có phản ứng");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // System Controls Section
-    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>⚙️ Điều Khiển Hệ Thống</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='mode-grid'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' id='powerSaveBtn' onclick='toggleScreen()' style='background: linear-gradient(145deg, #9e9e9e, #bdbdbd); color: white; border-color: #616161; font-size: 16px; font-weight: bold;'>📱 Tiết Kiệm: TẮT</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' id='micBtn' onclick='toggleMic()' style='background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border-color: #2e7d32; font-size: 16px; font-weight: bold;'>🎤 Mic: TẮT</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='forgetWiFi()' style='background: linear-gradient(145deg, #ff5722, #ff7043); color: white; border-color: #d84315; font-size: 16px; font-weight: bold;'>🔄 Quên WiFi & Tạo AP</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
-    httpd_resp_sendstr_chunk(req, "<strong>Tiết Kiệm Năng Lượng:</strong> TẮT = bình thường, BẬT = giảm tiêu thụ WiFi<br>");
-    httpd_resp_sendstr_chunk(req, "<strong>Mic:</strong> TẮT/BẬT microphone để lắng nghe giọng nói<br>");
-    httpd_resp_sendstr_chunk(req, "<strong>Quên WiFi & Tạo AP:</strong> xóa WiFi hiện tại, robot sẽ tạo Access Point để cấu hình WiFi mới");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Auto Pose Advanced Configuration
-    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🔄 Cấu Hình Auto Pose</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-config'>");
-    
-    // Time interval setting
-    httpd_resp_sendstr_chunk(req, "<div style='margin-bottom: 15px; padding: 12px; background: #e3f2fd; border: 2px solid #2196f3; border-radius: 8px;'>");
-    httpd_resp_sendstr_chunk(req, "<label style='display: block; font-weight: bold; margin-bottom: 8px; color: #000;'>⏱️ Thời gian giữa các tư thế (giây):</label>");
-    httpd_resp_sendstr_chunk(req, "<input type='number' id='poseInterval' class='time-input' value='60' min='5' max='300' style='width: 100px;'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='updateInterval()' style='margin-left: 10px; padding: 8px 16px;'>✓ Áp Dụng</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Pose selection checkboxes
-    httpd_resp_sendstr_chunk(req, "<div style='font-weight: bold; margin-bottom: 10px; color: #000;'>✅ Chọn các tư thế để Auto:</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_sit' checked><label for='pose_sit'>🪑 Ngồi (Sit Down)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_jump' checked><label for='pose_jump'>🦘 Nhảy (Jump)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_wave' checked><label for='pose_wave'>👋 Vẫy Tay (Wave)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_bow' checked><label for='pose_bow'>🙇 Cúi Chào (Bow)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_stretch' checked><label for='pose_stretch'>🧘 Thư Giản (Stretch)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_swing' checked><label for='pose_swing'>🎯 Lắc Lư (Swing)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='pose_dance' checked><label for='pose_dance'>💃 Nhảy Múa (Dance)</label></div>");
-    
-    httpd_resp_sendstr_chunk(req, "<button class='btn toggle-btn' id='autoPoseBtn2' onclick='toggleAutoPose()' style='width: 100%; margin-top: 15px; font-size: 16px;'>🔄 Bật/Tắt Auto Pose</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Auto Emoji Advanced Configuration
-    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>😊 Cấu Hình Auto Emoji</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-config'>");
-    
-    // Time interval setting for emoji
-    httpd_resp_sendstr_chunk(req, "<div style='margin-bottom: 15px; padding: 12px; background: #fff3e0; border: 2px solid #ff9800; border-radius: 8px;'>");
-    httpd_resp_sendstr_chunk(req, "<label style='display: block; font-weight: bold; margin-bottom: 8px; color: #000;'>⏱️ Thời gian giữa các emoji (giây):</label>");
-    httpd_resp_sendstr_chunk(req, "<input type='number' id='emojiInterval' class='time-input' value='10' min='3' max='120' style='width: 100px;'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='updateEmojiInterval()' style='margin-left: 10px; padding: 8px 16px;'>✓ Áp Dụng</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Emoji selection checkboxes
-    httpd_resp_sendstr_chunk(req, "<div style='font-weight: bold; margin-bottom: 10px; color: #000;'>✅ Chọn các emoji để Auto:</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_happy' checked><label for='emoji_happy'>😊 Vui (Happy)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_laughing' checked><label for='emoji_laughing'>😂 Cười To (Laughing)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_winking' checked><label for='emoji_winking'>😜 Nháy Mắt (Winking)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_cool' checked><label for='emoji_cool'>😎 Ngầu (Cool)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_love' checked><label for='emoji_love'>😍 Yêu (Love)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_surprised' checked><label for='emoji_surprised'>😮 Ngạc Nhiên (Surprised)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_excited' checked><label for='emoji_excited'>🤩 Phấn Khích (Excited)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_sleepy' checked><label for='emoji_sleepy'>😴 Buồn Ngủ (Sleepy)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_sad' checked><label for='emoji_sad'>😢 Buồn (Sad)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_angry' checked><label for='emoji_angry'>😠 Giận (Angry)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_confused' checked><label for='emoji_confused'>😕 Bối Rối (Confused)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_thinking' checked><label for='emoji_thinking'>🤔 Suy Nghĩ (Thinking)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_neutral' checked><label for='emoji_neutral'>😐 Bình Thường (Neutral)</label></div>");
-    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_shocked' checked><label for='emoji_shocked'>😱 Sốc (Shocked)</label></div>");
-    
-    httpd_resp_sendstr_chunk(req, "<button class='btn toggle-btn' id='autoEmojiBtn' onclick='toggleAutoEmoji()' style='width: 100%; margin-top: 15px; font-size: 16px; background: linear-gradient(145deg, #ff9800, #ffa726);'>😊 Bật/Tắt Auto Emoji</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    
-    // Emoji Mode Selector Section
-    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🎨 Chế Độ Hiển Thị Emoji</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='mode-grid'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' id='otto-mode' onclick='setEmojiMode(true)' style='background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border: 3px solid #2e7d32; font-size: 18px; font-weight: bold; box-shadow: 0 4px 8px rgba(0,0,0,0.2);'>🤖 OTTO GIF MODE (ACTIVE)</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' id='default-mode' onclick='setEmojiMode(false)' style='font-size: 16px; font-weight: bold;'>😊 Twemoji Text Mode</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
-    httpd_resp_sendstr_chunk(req, "<strong>🤖 OTTO GIF:</strong> Hiển thị emoji động GIF (Otto robot)<br>");
-    httpd_resp_sendstr_chunk(req, "<strong>😊 Twemoji:</strong> Hiển thị emoji văn bản chuẩn Unicode");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
 
-    // Response area for Page 2
-    httpd_resp_sendstr_chunk(req, "<div class='response' id='response2'>Cấu hình sẵn sàng...</div>");
-    httpd_resp_sendstr_chunk(req, "</div>"); // End Page 2
-    
-    httpd_resp_sendstr_chunk(req, "</div>"); // End container
+    // Response area
+    httpd_resp_sendstr_chunk(req, "<div class='response' id='response'>Ready for commands...</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
     
     // JavaScript - Simple and clean
     httpd_resp_sendstr_chunk(req, "<script>");
-    // Page navigation
-    httpd_resp_sendstr_chunk(req, "function showPage(pageNum) {");
-    httpd_resp_sendstr_chunk(req, "  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));");
-    httpd_resp_sendstr_chunk(req, "  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));");
-    httpd_resp_sendstr_chunk(req, "  document.getElementById('page' + pageNum).classList.add('active');");
-    httpd_resp_sendstr_chunk(req, "  document.getElementById('tab' + pageNum).classList.add('active');");
-    httpd_resp_sendstr_chunk(req, "}");
-    
     httpd_resp_sendstr_chunk(req, "function sendAction(action, param1, param2) {");
     httpd_resp_sendstr_chunk(req, "  console.log('Action:', action);");
     httpd_resp_sendstr_chunk(req, "  var url = '/action?cmd=' + action + '&p1=' + param1 + '&p2=' + param2;");
@@ -608,66 +414,6 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "  });");
     httpd_resp_sendstr_chunk(req, "}");
     
-    // Screen toggle JavaScript with state tracking
-    httpd_resp_sendstr_chunk(req, "let powerSaveState = false;"); // Track state
-    httpd_resp_sendstr_chunk(req, "function toggleScreen() {");
-    httpd_resp_sendstr_chunk(req, "  console.log('Toggling screen...');");
-    httpd_resp_sendstr_chunk(req, "  const btn = document.getElementById('powerSaveBtn');");
-    httpd_resp_sendstr_chunk(req, "  fetch('/screen_toggle').then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "    console.log('Screen toggle result:', d);");
-    httpd_resp_sendstr_chunk(req, "    document.getElementById('response2').innerHTML = d;");
-    httpd_resp_sendstr_chunk(req, "    powerSaveState = !powerSaveState;"); // Toggle state
-    httpd_resp_sendstr_chunk(req, "    if (powerSaveState) {"); // ON - blue
-    httpd_resp_sendstr_chunk(req, "      btn.style.background = 'linear-gradient(145deg, #2196f3, #42a5f5)';");
-    httpd_resp_sendstr_chunk(req, "      btn.style.borderColor = '#1565c0';");
-    httpd_resp_sendstr_chunk(req, "      btn.innerHTML = '📱 Tiết Kiệm: <strong>BẬT</strong>';");
-    httpd_resp_sendstr_chunk(req, "    } else {"); // OFF - grey
-    httpd_resp_sendstr_chunk(req, "      btn.style.background = 'linear-gradient(145deg, #9e9e9e, #bdbdbd)';");
-    httpd_resp_sendstr_chunk(req, "      btn.style.borderColor = '#616161';");
-    httpd_resp_sendstr_chunk(req, "      btn.innerHTML = '📱 Tiết Kiệm: <strong>TẮT</strong>';");
-    httpd_resp_sendstr_chunk(req, "    }");
-    httpd_resp_sendstr_chunk(req, "  });");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Toggle microphone JavaScript - with state tracking
-    httpd_resp_sendstr_chunk(req, "let micActive = false;");
-    httpd_resp_sendstr_chunk(req, "function toggleMic() {");
-    httpd_resp_sendstr_chunk(req, "  const micBtn = document.getElementById('micBtn');");
-    httpd_resp_sendstr_chunk(req, "  if (micActive) {");
-    httpd_resp_sendstr_chunk(req, "    console.log('Stopping microphone...');");
-    httpd_resp_sendstr_chunk(req, "    fetch('/wake_mic?action=stop').then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "      console.log('Mic stopped:', d);");
-    httpd_resp_sendstr_chunk(req, "      micActive = false;");
-    httpd_resp_sendstr_chunk(req, "      micBtn.innerHTML = '🎤 Mic: TẮT';");
-    httpd_resp_sendstr_chunk(req, "      micBtn.style.background = 'linear-gradient(145deg, #9e9e9e, #bdbdbd)';");
-    httpd_resp_sendstr_chunk(req, "      micBtn.style.borderColor = '#616161';");
-    httpd_resp_sendstr_chunk(req, "      document.getElementById('response2').innerHTML = d;");
-    httpd_resp_sendstr_chunk(req, "    });");
-    httpd_resp_sendstr_chunk(req, "  } else {");
-    httpd_resp_sendstr_chunk(req, "    console.log('Starting microphone...');");
-    httpd_resp_sendstr_chunk(req, "    fetch('/wake_mic').then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "      console.log('Mic started:', d);");
-    httpd_resp_sendstr_chunk(req, "      micActive = true;");
-    httpd_resp_sendstr_chunk(req, "      micBtn.innerHTML = '🎤 Mic: BẬT';");
-    httpd_resp_sendstr_chunk(req, "      micBtn.style.background = 'linear-gradient(145deg, #4caf50, #66bb6a)';");
-    httpd_resp_sendstr_chunk(req, "      micBtn.style.borderColor = '#2e7d32';");
-    httpd_resp_sendstr_chunk(req, "      document.getElementById('response2').innerHTML = d;");
-    httpd_resp_sendstr_chunk(req, "    });");
-    httpd_resp_sendstr_chunk(req, "  }");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Forget WiFi JavaScript
-    httpd_resp_sendstr_chunk(req, "function forgetWiFi() {");
-    httpd_resp_sendstr_chunk(req, "  if (confirm('Quên WiFi hiện tại và tạo Access Point?\\n\\nRobot sẽ khởi động lại và tạo AP để bạn có thể:\\n1. Kết nối vào AP của robot\\n2. Cấu hình WiFi mới qua trình duyệt\\n\\nBạn có chắc không?')) {");
-    httpd_resp_sendstr_chunk(req, "    console.log('Forgetting WiFi and entering AP mode...');");
-    httpd_resp_sendstr_chunk(req, "    fetch('/forget_wifi').then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "      console.log('Forget WiFi result:', d);");
-    httpd_resp_sendstr_chunk(req, "      alert('WiFi đã được quên!\\nRobot sẽ khởi động lại và tạo Access Point.\\nHãy kết nối vào AP của robot để cấu hình WiFi mới.');");
-    httpd_resp_sendstr_chunk(req, "      document.getElementById('response2').innerHTML = d;");
-    httpd_resp_sendstr_chunk(req, "    });");
-    httpd_resp_sendstr_chunk(req, "  }");
-    httpd_resp_sendstr_chunk(req, "}");
-    
     // Volume control JavaScript
     httpd_resp_sendstr_chunk(req, "function setVolume(volume) {");
     httpd_resp_sendstr_chunk(req, "  console.log('Setting volume:', volume);");
@@ -677,81 +423,23 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "  });");
     httpd_resp_sendstr_chunk(req, "}");
     
-    // Auto pose toggle JavaScript with pose selection
+    // Auto pose toggle JavaScript
     httpd_resp_sendstr_chunk(req, "var autoPoseEnabled = false;");
-    httpd_resp_sendstr_chunk(req, "var selectedPoses = ['sit','jump','wave','bow','stretch','swing','dance'];"); // Default all enabled
     httpd_resp_sendstr_chunk(req, "function toggleAutoPose() {");
     httpd_resp_sendstr_chunk(req, "  autoPoseEnabled = !autoPoseEnabled;");
     httpd_resp_sendstr_chunk(req, "  var btn = document.getElementById('autoPoseBtn');");
-    httpd_resp_sendstr_chunk(req, "  var btn2 = document.getElementById('autoPoseBtn2');");
     httpd_resp_sendstr_chunk(req, "  if (autoPoseEnabled) {");
-    httpd_resp_sendstr_chunk(req, "    if(btn) { btn.classList.add('active'); btn.style.background = '#4caf50'; btn.style.color = 'white'; }");
-    httpd_resp_sendstr_chunk(req, "    if(btn2) { btn2.classList.add('active'); btn2.style.background = '#4caf50'; btn2.style.color = 'white'; }");
+    httpd_resp_sendstr_chunk(req, "    btn.classList.add('active');");
+    httpd_resp_sendstr_chunk(req, "    btn.style.background = '#4caf50';");
+    httpd_resp_sendstr_chunk(req, "    btn.style.color = 'white';");
     httpd_resp_sendstr_chunk(req, "    document.getElementById('response').innerHTML = '✅ Tự động đổi tư thế BẬT';");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('response2')) document.getElementById('response2').innerHTML = '✅ Tự động đổi tư thế BẬT';");
     httpd_resp_sendstr_chunk(req, "  } else {");
-    httpd_resp_sendstr_chunk(req, "    if(btn) { btn.classList.remove('active'); btn.style.background = ''; btn.style.color = ''; }");
-    httpd_resp_sendstr_chunk(req, "    if(btn2) { btn2.classList.remove('active'); btn2.style.background = ''; btn2.style.color = ''; }");
+    httpd_resp_sendstr_chunk(req, "    btn.classList.remove('active');");
+    httpd_resp_sendstr_chunk(req, "    btn.style.background = '';");
+    httpd_resp_sendstr_chunk(req, "    btn.style.color = '';");
     httpd_resp_sendstr_chunk(req, "    document.getElementById('response').innerHTML = '⛔ Tự động đổi tư thế TẮT';");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('response2')) document.getElementById('response2').innerHTML = '⛔ Tự động đổi tư thế TẮT';");
     httpd_resp_sendstr_chunk(req, "  }");
-    // Get selected poses
-    httpd_resp_sendstr_chunk(req, "  updateSelectedPoses();");
-    httpd_resp_sendstr_chunk(req, "  var posesParam = selectedPoses.join(',');");
-    httpd_resp_sendstr_chunk(req, "  fetch('/auto_pose?enabled=' + (autoPoseEnabled ? 'true' : 'false') + '&poses=' + posesParam).then(r => r.text()).then(d => console.log('Auto pose:', d));");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Update interval function
-    httpd_resp_sendstr_chunk(req, "function updateInterval() {");
-    httpd_resp_sendstr_chunk(req, "  var interval = document.getElementById('poseInterval').value;");
-    httpd_resp_sendstr_chunk(req, "  fetch('/auto_pose_interval?seconds=' + interval).then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "    document.getElementById('response2').innerHTML = '⏱️ Đã đặt thời gian: ' + interval + ' giây';");
-    httpd_resp_sendstr_chunk(req, "    console.log('Interval updated:', d);");
-    httpd_resp_sendstr_chunk(req, "  });");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Update selected poses
-    httpd_resp_sendstr_chunk(req, "function updateSelectedPoses() {");
-    httpd_resp_sendstr_chunk(req, "  selectedPoses = [];");
-    httpd_resp_sendstr_chunk(req, "  ['sit','jump','wave','bow','stretch','swing','dance'].forEach(p => {");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('pose_' + p) && document.getElementById('pose_' + p).checked) selectedPoses.push(p);");
-    httpd_resp_sendstr_chunk(req, "  });");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Auto emoji toggle JavaScript with emoji selection
-    httpd_resp_sendstr_chunk(req, "var autoEmojiEnabled = false;");
-    httpd_resp_sendstr_chunk(req, "var selectedEmojis = ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked'];"); // Default all enabled
-    httpd_resp_sendstr_chunk(req, "function toggleAutoEmoji() {");
-    httpd_resp_sendstr_chunk(req, "  autoEmojiEnabled = !autoEmojiEnabled;");
-    httpd_resp_sendstr_chunk(req, "  var btn = document.getElementById('autoEmojiBtn');");
-    httpd_resp_sendstr_chunk(req, "  if (autoEmojiEnabled) {");
-    httpd_resp_sendstr_chunk(req, "    if(btn) { btn.classList.add('active'); btn.style.background = '#ff9800'; btn.style.color = 'white'; }");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('response2')) document.getElementById('response2').innerHTML = '✅ Tự động đổi emoji BẬT';");
-    httpd_resp_sendstr_chunk(req, "  } else {");
-    httpd_resp_sendstr_chunk(req, "    if(btn) { btn.classList.remove('active'); btn.style.background = ''; btn.style.color = ''; }");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('response2')) document.getElementById('response2').innerHTML = '⛔ Tự động đổi emoji TẮT';");
-    httpd_resp_sendstr_chunk(req, "  }");
-    // Get selected emojis
-    httpd_resp_sendstr_chunk(req, "  updateSelectedEmojis();");
-    httpd_resp_sendstr_chunk(req, "  var emojisParam = selectedEmojis.join(',');");
-    httpd_resp_sendstr_chunk(req, "  fetch('/auto_emoji?enabled=' + (autoEmojiEnabled ? 'true' : 'false') + '&emojis=' + emojisParam).then(r => r.text()).then(d => console.log('Auto emoji:', d));");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Update emoji interval function
-    httpd_resp_sendstr_chunk(req, "function updateEmojiInterval() {");
-    httpd_resp_sendstr_chunk(req, "  var interval = document.getElementById('emojiInterval').value;");
-    httpd_resp_sendstr_chunk(req, "  fetch('/auto_emoji_interval?seconds=' + interval).then(r => r.text()).then(d => {");
-    httpd_resp_sendstr_chunk(req, "    document.getElementById('response2').innerHTML = '⏱️ Đã đặt thời gian emoji: ' + interval + ' giây';");
-    httpd_resp_sendstr_chunk(req, "    console.log('Emoji interval updated:', d);");
-    httpd_resp_sendstr_chunk(req, "  });");
-    httpd_resp_sendstr_chunk(req, "}");
-    
-    // Update selected emojis
-    httpd_resp_sendstr_chunk(req, "function updateSelectedEmojis() {");
-    httpd_resp_sendstr_chunk(req, "  selectedEmojis = [];");
-    httpd_resp_sendstr_chunk(req, "  ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked'].forEach(e => {");
-    httpd_resp_sendstr_chunk(req, "    if(document.getElementById('emoji_' + e) && document.getElementById('emoji_' + e).checked) selectedEmojis.push(e);");
-    httpd_resp_sendstr_chunk(req, "  });");
+    httpd_resp_sendstr_chunk(req, "  fetch('/auto_pose?enabled=' + (autoPoseEnabled ? 'true' : 'false')).then(r => r.text()).then(d => console.log('Auto pose:', d));");
     httpd_resp_sendstr_chunk(req, "}");
     
     // Initialize volume slider
@@ -906,16 +594,6 @@ void otto_execute_web_action(const char* action, int param1, int param2) {
         otto_controller_queue_action(ACTION_DOG_WALK, 3, 120, 0, 0);
         ret = ESP_OK;
         ESP_LOGI(TAG, "🔍 Search sequence queued: look around → walk forward");
-    } else if (strstr(action, "roll_over")) {
-        // Excited emoji when rolling over
-        if (auto display = Board::GetInstance().GetDisplay()) display->SetEmotion("excited");
-        ret = otto_controller_queue_action(ACTION_DOG_ROLL_OVER, param1 > 0 ? param1 : 1, param2 > 0 ? param2 : 200, 0, 0);
-        ESP_LOGI(TAG, "🐕 Rolling over: %d rolls, speed %d", param1 > 0 ? param1 : 1, param2 > 0 ? param2 : 200);
-    } else if (strstr(action, "play_dead")) {
-        // Shocked emoji when playing dead
-        if (auto display = Board::GetInstance().GetDisplay()) display->SetEmotion("shocked");
-        ret = otto_controller_queue_action(ACTION_DOG_PLAY_DEAD, 1, param1 > 0 ? param1 : 5, 0, 0);
-        ESP_LOGI(TAG, "💀 Playing dead for %d seconds", param1 > 0 ? param1 : 5);
     } else if (strstr(action, "stop")) {
         // Stop action - clear queue and go to home position
         ret = otto_controller_stop_all();  // This will clear all queued actions
@@ -1168,29 +846,21 @@ esp_err_t otto_volume_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Auto pose handler with pose selection
+// Auto pose handler
 esp_err_t otto_auto_pose_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "🔄 AUTO POSE HANDLER CALLED!");
     
+    // Add CORS headers
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     
-    char query[300] = {0};
+    char query[100] = {0};
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         ESP_LOGI(TAG, "📥 Auto pose query: %s", query);
         
         char enabled_str[10] = {0};
-        char poses_str[200] = {0};
         httpd_query_key_value(query, "enabled", enabled_str, sizeof(enabled_str));
-        httpd_query_key_value(query, "poses", poses_str, sizeof(poses_str));
         
         bool enabled = (strcmp(enabled_str, "true") == 0);
-        
-        // Update selected poses if provided
-        if (strlen(poses_str) > 0) {
-            strncpy(selected_poses, poses_str, sizeof(selected_poses) - 1);
-            ESP_LOGI(TAG, "📝 Selected poses: %s", selected_poses);
-        }
-        
         ESP_LOGI(TAG, "Setting auto pose: %s", enabled ? "ENABLED" : "DISABLED");
         
         auto_pose_enabled = enabled;
@@ -1200,18 +870,17 @@ esp_err_t otto_auto_pose_handler(httpd_req_t *req) {
             if (auto_pose_timer == NULL) {
                 auto_pose_timer = xTimerCreate(
                     "AutoPoseTimer",
-                    pdMS_TO_TICKS(auto_pose_interval_ms),
+                    pdMS_TO_TICKS(60000),  // 60 seconds = 1 minute
                     pdTRUE,                 // Auto-reload
                     NULL,
                     auto_pose_timer_callback
                 );
             }
             
-            // Update timer period and start
+            // Start the timer
             if (auto_pose_timer != NULL) {
-                xTimerChangePeriod(auto_pose_timer, pdMS_TO_TICKS(auto_pose_interval_ms), 0);
                 xTimerStart(auto_pose_timer, 0);
-                ESP_LOGI(TAG, "✅ Auto pose timer started with interval %lu ms", auto_pose_interval_ms);
+                ESP_LOGI(TAG, "✅ Auto pose timer started");
             }
         } else {
             // Stop the timer
@@ -1233,261 +902,6 @@ esp_err_t otto_auto_pose_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Auto pose interval handler
-esp_err_t otto_auto_pose_interval_handler(httpd_req_t *req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    
-    char query[100] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        char seconds_str[10] = {0};
-        httpd_query_key_value(query, "seconds", seconds_str, sizeof(seconds_str));
-        
-        int seconds = atoi(seconds_str);
-        if (seconds >= 5 && seconds <= 300) {
-            auto_pose_interval_ms = seconds * 1000;
-            ESP_LOGI(TAG, "⏱️ Auto pose interval set to %d seconds", seconds);
-            
-            // Update timer if running
-            if (auto_pose_enabled && auto_pose_timer != NULL) {
-                xTimerChangePeriod(auto_pose_timer, pdMS_TO_TICKS(auto_pose_interval_ms), 0);
-            }
-            
-            httpd_resp_set_type(req, "text/plain");
-            char response[100];
-            snprintf(response, sizeof(response), "✅ Đã đặt thời gian: %d giây", seconds);
-            httpd_resp_sendstr(req, response);
-        } else {
-            httpd_resp_set_status(req, "400 Bad Request");
-            httpd_resp_sendstr(req, "❌ Thời gian phải từ 5-300 giây");
-        }
-    } else {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_sendstr(req, "❌ Missing seconds parameter");
-    }
-    
-    return ESP_OK;
-}
-
-// Auto emoji handler with emoji selection
-esp_err_t otto_auto_emoji_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "😊 AUTO EMOJI HANDLER CALLED!");
-    
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    
-    char query[400] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        ESP_LOGI(TAG, "📥 Auto emoji query: %s", query);
-        
-        char enabled_str[10] = {0};
-        char emojis_str[300] = {0};
-        httpd_query_key_value(query, "enabled", enabled_str, sizeof(enabled_str));
-        httpd_query_key_value(query, "emojis", emojis_str, sizeof(emojis_str));
-        
-        bool enabled = (strcmp(enabled_str, "true") == 0);
-        
-        // Update selected emojis if provided
-        if (strlen(emojis_str) > 0) {
-            strncpy(selected_emojis, emojis_str, sizeof(selected_emojis) - 1);
-            ESP_LOGI(TAG, "📝 Selected emojis: %s", selected_emojis);
-        }
-        
-        ESP_LOGI(TAG, "Setting auto emoji: %s", enabled ? "ENABLED" : "DISABLED");
-        
-        auto_emoji_enabled = enabled;
-        
-        if (enabled) {
-            // Create timer if not exists
-            if (auto_emoji_timer == NULL) {
-                auto_emoji_timer = xTimerCreate(
-                    "AutoEmojiTimer",
-                    pdMS_TO_TICKS(auto_emoji_interval_ms),
-                    pdTRUE,                 // Auto-reload
-                    NULL,
-                    auto_emoji_timer_callback
-                );
-            }
-            
-            // Update timer period and start
-            if (auto_emoji_timer != NULL) {
-                xTimerChangePeriod(auto_emoji_timer, pdMS_TO_TICKS(auto_emoji_interval_ms), 0);
-                xTimerStart(auto_emoji_timer, 0);
-                ESP_LOGI(TAG, "✅ Auto emoji timer started with interval %lu ms", auto_emoji_interval_ms);
-            }
-        } else {
-            // Stop the timer
-            if (auto_emoji_timer != NULL) {
-                xTimerStop(auto_emoji_timer, 0);
-                ESP_LOGI(TAG, "⏹️ Auto emoji timer stopped");
-            }
-        }
-        
-        httpd_resp_set_type(req, "text/plain");
-        char response[100];
-        snprintf(response, sizeof(response), "✅ Tự động đổi cảm xúc đã %s", enabled ? "BẬT" : "TẮT");
-        httpd_resp_sendstr(req, response);
-    } else {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_sendstr(req, "❌ Missing enabled parameter");
-    }
-    
-    return ESP_OK;
-}
-
-// Auto emoji interval handler
-esp_err_t otto_auto_emoji_interval_handler(httpd_req_t *req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    
-    char query[100] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        char seconds_str[10] = {0};
-        httpd_query_key_value(query, "seconds", seconds_str, sizeof(seconds_str));
-        
-        int seconds = atoi(seconds_str);
-        if (seconds >= 3 && seconds <= 300) {
-            auto_emoji_interval_ms = seconds * 1000;
-            ESP_LOGI(TAG, "⏱️ Auto emoji interval set to %d seconds", seconds);
-            
-            // Update timer if running
-            if (auto_emoji_enabled && auto_emoji_timer != NULL) {
-                xTimerChangePeriod(auto_emoji_timer, pdMS_TO_TICKS(auto_emoji_interval_ms), 0);
-            }
-            
-            httpd_resp_set_type(req, "text/plain");
-            char response[100];
-            snprintf(response, sizeof(response), "✅ Đã đặt thời gian: %d giây", seconds);
-            httpd_resp_sendstr(req, response);
-        } else {
-            httpd_resp_set_status(req, "400 Bad Request");
-            httpd_resp_sendstr(req, "❌ Thời gian phải từ 3-300 giây");
-        }
-    } else {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_sendstr(req, "❌ Missing seconds parameter");
-    }
-    
-    return ESP_OK;
-}
-
-// Screen toggle handler
-esp_err_t otto_screen_toggle_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "📱 SCREEN TOGGLE HANDLER CALLED!");
-
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-
-    // Get display instance and toggle power save mode
-    auto display = Board::GetInstance().GetDisplay();
-    if (display) {
-        // Use power save mode to simulate screen toggle
-        static bool power_save_mode = false; // Track current state
-        power_save_mode = !power_save_mode;
-
-        display->SetPowerSaveMode(power_save_mode);
-
-        ESP_LOGI(TAG, "📱 Power save mode toggled: %s", power_save_mode ? "ON" : "OFF");
-
-        httpd_resp_set_type(req, "text/plain");
-        char response[100];
-        snprintf(response, sizeof(response), "✅ Chế độ tiết kiệm năng lượng: %s", power_save_mode ? "BẬT" : "TẮT");
-        httpd_resp_sendstr(req, response);
-    } else {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "❌ Display system not available");
-    }
-
-    return ESP_OK;
-}
-
-// Wake microphone handler - Toggle listening mode on/off
-esp_err_t otto_wake_mic_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "🎤 WAKE MICROPHONE HANDLER CALLED!");
-    
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    
-    // Check for action parameter (start or stop)
-    char action_buf[10];
-    if (httpd_req_get_url_query_str(req, action_buf, sizeof(action_buf)) == ESP_OK) {
-        char action[10];
-        if (httpd_query_key_value(action_buf, "action", action, sizeof(action)) == ESP_OK) {
-            if (strcmp(action, "stop") == 0) {
-                // Stop listening mode - use ToggleChatState like boot button
-                Application::GetInstance().ToggleChatState();
-                ESP_LOGI(TAG, "Microphone toggled off");
-                
-                httpd_resp_set_type(req, "text/plain");
-                httpd_resp_sendstr(req, "✅ Microphone đã tắt! �");
-                return ESP_OK;
-            }
-        }
-    }
-    
-    // Default: Toggle listening mode - use ToggleChatState like boot button
-    Application::GetInstance().ToggleChatState();
-    ESP_LOGI(TAG, "Microphone toggled on");
-    
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_sendstr(req, "✅ Microphone đang lắng nghe! 🎤");
-    
-    return ESP_OK;
-}
-
-// Forget WiFi handler - Reset WiFi and enter AP mode for configuration
-esp_err_t otto_forget_wifi_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "🔄 FORGET WIFI HANDLER CALLED!");
-    
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    
-    // Stop WiFi completely to prevent auto-reconnection
-    esp_wifi_stop();
-    ESP_LOGI(TAG, "🔄 WiFi stopped");
-    
-    bool success = false;
-    
-    // Erase WiFi credentials from wifi_config namespace
-    nvs_handle_t wifi_handle;
-    esp_err_t err = nvs_open("wifi_config", NVS_READWRITE, &wifi_handle);
-    if (err == ESP_OK) {
-        // Erase WiFi SSID and password
-        nvs_erase_key(wifi_handle, "ssid");
-        nvs_erase_key(wifi_handle, "password");
-        nvs_commit(wifi_handle);
-        nvs_close(wifi_handle);
-        ESP_LOGI(TAG, "✅ WiFi credentials erased from wifi_config namespace");
-        success = true;
-    } else {
-        ESP_LOGE(TAG, "⚠️ Failed to open wifi_config NVS: %s", esp_err_to_name(err));
-    }
-    
-    // Set force_ap flag in wifi namespace to enter AP mode
-    nvs_handle_t settings_handle;
-    err = nvs_open("wifi", NVS_READWRITE, &settings_handle);
-    if (err == ESP_OK) {
-        nvs_set_i32(settings_handle, "force_ap", 1);
-        nvs_commit(settings_handle);
-        nvs_close(settings_handle);
-        ESP_LOGI(TAG, "✅ force_ap flag set to 1 in wifi namespace");
-        success = true;
-    } else {
-        ESP_LOGE(TAG, "⚠️ Failed to open wifi NVS: %s", esp_err_to_name(err));
-    }
-    
-    if (success) {
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "✅ Đã quên WiFi. Robot sẽ khởi động lại và tạo AP để cấu hình WiFi mới...");
-        
-        ESP_LOGI(TAG, "🔄 Restarting to enter AP mode for WiFi configuration");
-        
-        // Restart the device after a short delay
-        vTaskDelay(pdMS_TO_TICKS(2000)); // Wait 2 seconds
-        esp_restart();
-    } else {
-        ESP_LOGE(TAG, "❌ Failed to forget WiFi");
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "❌ Không thể xóa thông tin WiFi");
-    }
-    
-    return ESP_OK;
-}
-
 // Start HTTP server
 esp_err_t otto_start_webserver(void) {
     if (server != NULL) {
@@ -1497,7 +911,7 @@ esp_err_t otto_start_webserver(void) {
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 17;  // Increased for screen_toggle, wake_up, wake_mic, forget_wifi and change_wifi handlers
+    config.max_uri_handlers = 10;
     config.max_resp_headers = 8;
     config.stack_size = 8192;
     
@@ -1571,60 +985,6 @@ esp_err_t otto_start_webserver(void) {
             .user_ctx = NULL
         };
         httpd_register_uri_handler(server, &auto_pose_uri);
-        
-        // Auto pose interval handler registration
-        httpd_uri_t auto_pose_interval_uri = {
-            .uri = "/auto_pose_interval",
-            .method = HTTP_GET,
-            .handler = otto_auto_pose_interval_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &auto_pose_interval_uri);
-        
-        // Auto emoji handler registration
-        httpd_uri_t auto_emoji_uri = {
-            .uri = "/auto_emoji",
-            .method = HTTP_GET,
-            .handler = otto_auto_emoji_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &auto_emoji_uri);
-        
-        // Auto emoji interval handler registration
-        httpd_uri_t auto_emoji_interval_uri = {
-            .uri = "/auto_emoji_interval",
-            .method = HTTP_GET,
-            .handler = otto_auto_emoji_interval_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &auto_emoji_interval_uri);
-        
-        // Screen toggle handler registration
-        httpd_uri_t screen_toggle_uri = {
-            .uri = "/screen_toggle",
-            .method = HTTP_GET,
-            .handler = otto_screen_toggle_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &screen_toggle_uri);
-        
-        // Forget WiFi handler registration
-        httpd_uri_t forget_wifi_uri = {
-            .uri = "/forget_wifi",
-            .method = HTTP_GET,
-            .handler = otto_forget_wifi_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &forget_wifi_uri);
-        
-        // Wake microphone handler registration (supports start/stop)
-        httpd_uri_t wake_mic_uri = {
-            .uri = "/wake_mic",
-            .method = HTTP_GET,
-            .handler = otto_wake_mic_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server, &wake_mic_uri);
         
         ESP_LOGI(TAG, "HTTP server started successfully");
         webserver_enabled = true;

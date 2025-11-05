@@ -77,8 +77,6 @@ public:
     void DogStretch(int cycles = 2, int speed_delay = 15);
     void DogScratch(int scratches = 5, int speed_delay = 50);  // New: Sit + BR leg scratch (gãi ngứa)
     void WagTail(int wags = 5, int speed_delay = 100);  // New: Wag tail movement
-    void DogRollOver(int rolls = 1, int speed_delay = 200);  // New: Roll over movement
-    void DogPlayDead(int duration_seconds = 5);  // New: Play dead (lie down and stay still)
 
     //-- Legacy movement functions (adapted to work with 4 servos)
     void Jump(float steps = 1, int period = 2000);

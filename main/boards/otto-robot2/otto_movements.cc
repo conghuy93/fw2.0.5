@@ -181,10 +181,9 @@ void Otto::Home() {
 
 void Otto::StandUp() {
     ESP_LOGI(TAG, "Dog standing up to rest position");
-    // Increase delay from 500ms to 1200ms for smoother, gentler standing up
-    ServoInit(90, 90, 90, 90, 1200);
+    ServoInit(90, 90, 90, 90, 500);
     is_otto_resting_ = true;
-    vTaskDelay(pdMS_TO_TICKS(500));  // Increased wait time after standing
+    vTaskDelay(pdMS_TO_TICKS(200));
 }
 
 bool Otto::GetRestState() {
@@ -337,10 +336,8 @@ void Otto::DogSitDown(int delay_time) {
 void Otto::DogLieDown(int delay_time) {
     ESP_LOGI(TAG, "Dog lying down completely");
     
-    // Gradually lower all legs to lie flat - slow and gentle (increased delay_time)
-    // Use longer delay for smoother transition
-    int smooth_delay = (delay_time < 1000) ? 1500 : delay_time;
-    ExecuteDogMovement(5, 5, 5, 5, smooth_delay);
+    // Gradually lower all legs to lie flat
+    ExecuteDogMovement(5, 5, 5, 5, delay_time);
     
     vTaskDelay(pdMS_TO_TICKS(1000));  // Hold lying position
     
@@ -594,74 +591,6 @@ void Otto::WagTail(int wags, int speed_delay) {
     // Return to center
     ServoAngleSet(SERVO_TAIL, tail_center, 0);
     ESP_LOGI(TAG, "🐕 Tail wag completed");
-}
-
-//-- Dog Roll Over (new movement - lăn qua lăn lại)
-void Otto::DogRollOver(int rolls, int speed_delay) {
-    ESP_LOGI(TAG, "🐕 Rolling over %d times", rolls);
-    
-    // Start from lying down position
-    DogLieDown(800);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    
-    for (int roll_count = 0; roll_count < rolls; roll_count++) {
-        ESP_LOGI(TAG, "Roll %d", roll_count + 1);
-        
-        // Roll to the right side
-        // Lift left side legs up, right side legs stay down
-        ServoAngleSet(SERVO_LF, 150, 0);  // Left front up
-        ServoAngleSet(SERVO_LB, 150, 0);  // Left back up
-        ServoAngleSet(SERVO_RF, 30, 0);   // Right front down
-        ServoAngleSet(SERVO_RB, 30, speed_delay); // Right back down
-        
-        vTaskDelay(pdMS_TO_TICKS(speed_delay * 2));
-        
-        // Complete the roll - all legs on ground briefly
-        ExecuteDogMovement(90, 90, 90, 90, speed_delay);
-        vTaskDelay(pdMS_TO_TICKS(speed_delay));
-        
-        // Now on the other side - roll back to left
-        ServoAngleSet(SERVO_RF, 150, 0);  // Right front up
-        ServoAngleSet(SERVO_RB, 150, 0);  // Right back up
-        ServoAngleSet(SERVO_LF, 30, 0);   // Left front down
-        ServoAngleSet(SERVO_LB, 30, speed_delay); // Left back down
-        
-        vTaskDelay(pdMS_TO_TICKS(speed_delay * 2));
-        
-        // Complete the roll back to original position
-        ExecuteDogMovement(90, 90, 90, 90, speed_delay);
-        vTaskDelay(pdMS_TO_TICKS(speed_delay));
-    }
-    
-    // End by standing up
-    StandUp();
-    ESP_LOGI(TAG, "🐕 Roll over completed");
-}
-
-//-- Dog Play Dead (new movement - giả chết)
-void Otto::DogPlayDead(int duration_seconds) {
-    ESP_LOGI(TAG, "💀 Playing dead for %d seconds", duration_seconds);
-    
-    // Lie down dramatically
-    DogLieDown(1200);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    
-    // Stay completely still for the specified duration
-    // Legs stay at 5° (lying flat), no movement
-    int total_delay = duration_seconds * 1000; // Convert to milliseconds
-    int check_interval = 1000; // Check every 1 second
-    int checks = total_delay / check_interval;
-    
-    for (int i = 0; i < checks; i++) {
-        ESP_LOGI(TAG, "💀 Still playing dead... (%d/%d seconds)", i + 1, duration_seconds);
-        vTaskDelay(pdMS_TO_TICKS(check_interval));
-    }
-    
-    // Slowly "come back to life" - gentle stand up
-    ESP_LOGI(TAG, "🐕 Coming back to life...");
-    StandUp();
-    
-    ESP_LOGI(TAG, "🐕 Play dead completed");
 }
 
 ///////////////////////////////////////////////////////////////////

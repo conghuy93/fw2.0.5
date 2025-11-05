@@ -8,6 +8,7 @@
 
 class PowerManager {
 private:
+    // 电池电量区间-分压电阻为2个100k
     static constexpr struct {
         uint16_t adc;
         uint8_t level;
@@ -49,6 +50,9 @@ private:
         average_adc /= adc_values_count_;
 
         CalculateBatteryLevel(average_adc);
+
+        // ESP_LOGI("PowerManager", "ADC值: %d 平均值: %ld 电量: %u%%", adc_value, average_adc,
+        //          battery_level_);
     }
 
     void CalculateBatteryLevel(uint32_t average_adc) {
@@ -87,7 +91,7 @@ public:
             .skip_unhandled_events = true,
         };
         ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer_handle_));
-        ESP_ERROR_CHECK(esp_timer_start_periodic(timer_handle_, 1000000));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(timer_handle_, 1000000));  // 1秒
 
         InitializeAdc();
     }

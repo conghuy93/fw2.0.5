@@ -281,6 +281,14 @@ void OttoEmojiDisplay::UpdateStatusBar(bool update_all) {
         SpiLcdDisplay::UpdateStatusBar(update_all);
         last_parent_update = now;
     }
+    
+    // 强制隐藏低电量弹窗
+    if (low_battery_popup_ != nullptr) {
+        if (!lv_obj_has_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "强制隐藏低电量弹窗");
+        }
+    }
 }
 
 void OttoEmojiDisplay::SetEmojiMode(bool use_otto_emoji) {
