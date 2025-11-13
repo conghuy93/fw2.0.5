@@ -62,7 +62,13 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+    void SendSttMessage(const std::string& text);
     AudioService& GetAudioService() { return audio_service_; }
+    
+    // Gemini AI fallback
+    void InitializeGemini();
+    void QueryGemini(const std::string& prompt);
+    bool IsGeminiAvailable() const;
 
 private:
     Application();
@@ -73,6 +79,7 @@ private:
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
+    esp_timer_handle_t control_panel_timer_handle_ = nullptr;  // Auto-close control panel after 5 minutes
     volatile DeviceState device_state_ = kDeviceStateUnknown;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
@@ -82,6 +89,7 @@ private:
     bool has_server_time_ = false;
     bool aborted_ = false;
     bool emotion_locked_ = false;  // Lock emotion during keyword trigger sequences
+    std::string last_web_wake_word_;  // Track last wake word sent from web UI to skip echo
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
@@ -91,6 +99,8 @@ private:
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
+    void OpenControlPanel();  // Open web control panel with IP display
+    void CloseControlPanel(); // Close web control panel
 };
 
 

@@ -19,9 +19,12 @@
 #include "mcp_server.h"
 #include "otto_emoji_display.h"
 #include "otto_webserver.h"
+#include "drawing_display.h"
+#include "udp_draw_service.h"
 #include "power_manager.h"
 #include "system_reset.h"
 #include "wifi_board.h"
+#include "boards/common/esp32_music.h"
 
 #define TAG "OttoRobot"
 
@@ -41,13 +44,20 @@ private:
     LcdDisplay* display_;
     PowerManager* power_manager_;
     Button boot_button_;
+    Esp32Music* music_player_;  // HTTP audio streaming music player
     // TTP223 is active HIGH on touch; enable power-save mode
+    // Now on GPIO 12 instead of GPIO 2
     Button touch_button_{TOUCH_TTP223_GPIO, true, 0, 0, true};
     bool touch_sensor_enabled_ = true;  // Touch sensor can be disabled via web UI
     
     // Touch counting for IP display feature
     int touch_count_ = 0;                 // Count consecutive touches
     uint32_t last_touch_time_ = 0;        // Time of last touch (for timeout)
+    
+    // UDP Drawing Service
+    std::unique_ptr<DrawingDisplay> drawing_display_;
+    std::unique_ptr<UdpDrawService> udp_draw_service_;
+    
     void InitializePowerManager() {
         power_manager_ =
             new PowerManager(POWER_CHARGE_DETECT_PIN, POWER_ADC_UNIT, POWER_ADC_CHANNEL);
@@ -214,11 +224,28 @@ private:
         ::InitializeOttoController();
     }
 
+    void InitializeUdpDrawingService() {
+        ESP_LOGI(TAG, "🎨 Initializing UDP Drawing Service...");
+        
+        // Create DrawingDisplay (same size as main display)
+        drawing_display_ = std::make_unique<DrawingDisplay>(display_->width(), display_->height());
+        drawing_display_->StartDisplay();
+        
+        // Create UDP Drawing Service with drawing display and port 12345
+        udp_draw_service_ = std::make_unique<UdpDrawService>(drawing_display_.get(), 12345);
+        
+        // Set pointers for web UI access
+        otto_set_udp_draw_service(udp_draw_service_.get());
+        otto_set_drawing_display(drawing_display_.get());
+        
+        ESP_LOGI(TAG, "✅ UDP Drawing Service initialized on port 12345");
+        ESP_LOGI(TAG, "📱 Service will start when WiFi connects");
+    }
+
     void InitializeWebServer() {
         ESP_LOGI(TAG, "Initializing Otto Web Controller");
         
-        // Simple approach: Start web server in background task
-        // It will auto-detect WiFi connection and start when available
+        // Auto-start web server when WiFi connects
         xTaskCreate([](void* param) {
             // Wait for WiFi to be ready
             vTaskDelay(pdMS_TO_TICKS(5000)); // Wait 5 seconds
@@ -228,7 +255,7 @@ private:
             if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
                 ESP_LOGI(TAG, "✅ WiFi connected, starting Otto Web Controller...");
                 StartOttoWebServer();
-                ESP_LOGI(TAG, "🌐 Otto Web Controller available - No password required!");
+                ESP_LOGI(TAG, "🌐 Otto Web Controller is now available!");
             } else {
                 ESP_LOGI(TAG, "⏳ WiFi not connected yet - Otto Web Controller will retry...");
                 
@@ -238,7 +265,7 @@ private:
                     if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
                         ESP_LOGI(TAG, "✅ WiFi connected, starting Otto Web Controller...");
                         StartOttoWebServer();
-                        ESP_LOGI(TAG, "🌐 Otto Web Controller available - No password required!");
+                        ESP_LOGI(TAG, "🌐 Otto Web Controller is now available!");
                         break;
                     }
                 }
@@ -246,8 +273,7 @@ private:
             vTaskDelete(NULL);
         }, "otto_web_init", 4096, NULL, 5, NULL);
         
-        ESP_LOGI(TAG, "🚫 No password required - Direct access!");
-        ESP_LOGI(TAG, "🌐 Access at: http://[ESP32_IP_ADDRESS] when WiFi connects");
+        ESP_LOGI(TAG, "🌐 Web server will auto-start when WiFi connects");
     }
 
     void InitializeStateChangeCallback() {
@@ -271,8 +297,10 @@ private:
                         display_->SetEmotion("confused");
                     }
                     
-                    // Execute scratch action immediately
+                    // Execute scratch action immediately, then lie down
                     otto_controller_queue_action(ACTION_DOG_SCRATCH, 3, 50, 0, 0);
+                    otto_controller_queue_action(ACTION_DOG_LIE_DOWN, 1, 1500, 0, 0);  // Lie down after scratch
+                    ESP_LOGI(TAG, "🛏️ Queued lie down action after scratch");
                     
                     vTaskDelay(pdMS_TO_TICKS(2000));
                     
@@ -296,15 +324,26 @@ private:
     }
 
 public:
-    OttoRobot() : boot_button_(BOOT_BUTTON_GPIO) {
+    OttoRobot() : boot_button_(BOOT_BUTTON_GPIO), music_player_(nullptr) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
         InitializePowerManager();
         InitializeOttoController();
+        InitializeUdpDrawingService();
         InitializeWebServer();
         InitializeStateChangeCallback();
         GetBacklight()->RestoreBrightness();
+        
+        // Initialize music player
+        music_player_ = new Esp32Music();
+        ESP_LOGI(TAG, "🎵 Music player initialized");
+    }
+    
+    ~OttoRobot() {
+        if (music_player_) {
+            delete music_player_;
+        }
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -329,7 +368,18 @@ public:
     }
 
     virtual MusicPlayer* GetMusicPlayer() override { 
-        return nullptr; // Otto robot không có music player
+        return music_player_;  // Return HTTP streaming music player
+    }
+
+    virtual void StartNetwork() override {
+        WifiBoard::StartNetwork();
+        
+        // Start UDP Drawing Service sau khi WiFi connected
+        ESP_LOGI(TAG, "🎨 Starting UDP Drawing Service...");
+        if (udp_draw_service_ && udp_draw_service_->Start()) {
+            ESP_LOGI(TAG, "✅ UDP Drawing Service started on port 12345");
+            ESP_LOGI(TAG, "🎨 Drawing web UI: http://[IP]/draw");
+        }
     }
 
 public:

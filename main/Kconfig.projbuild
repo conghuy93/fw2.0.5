@@ -358,6 +358,11 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
         select LV_USE_GIF
         select LV_GIF_CACHE_DECODE_DATA
+    config BOARD_TYPE_KIKI_ROBOT
+        bool "kikiRobot (Enhanced Otto)"
+        depends on IDF_TARGET_ESP32S3
+        select LV_USE_GIF
+        select LV_GIF_CACHE_DECODE_DATA
     config BOARD_TYPE_ELECTRON_BOT
         bool "electronBot"
         depends on IDF_TARGET_ESP32S3
@@ -622,6 +627,50 @@ menu TAIJIPAI_S3_CONFIG
     default n
     help
         启动双声道
+endmenu
+
+menu "Gemini AI Configuration"
+    config ENABLE_GEMINI_AI
+        bool "Enable Gemini AI Integration"
+        default n
+        help
+            Enable Google Gemini AI for intelligent responses.
+            Otto will use Gemini for natural conversation and function calling.
+
+    config GEMINI_API_KEY
+        depends on ENABLE_GEMINI_AI
+        string "Gemini API Key"
+        default ""
+        help
+            Your Google Gemini API key.
+            Get it from: https://ai.google.dev/
+
+    config GEMINI_MODEL
+        depends on ENABLE_GEMINI_AI
+        string "Gemini Model"
+        default "gemini-2.0-flash-exp"
+        help
+            Gemini model to use. Options:
+            - gemini-2.0-flash-exp (recommended, fastest)
+            - gemini-1.5-flash
+            - gemini-1.5-pro
+
+    config GEMINI_MAX_HISTORY
+        depends on ENABLE_GEMINI_AI
+        int "Max Conversation History"
+        default 10
+        range 0 50
+        help
+            Maximum number of messages to keep in conversation history.
+            Higher = better context, but uses more memory.
+
+    config GEMINI_TIMEOUT_MS
+        depends on ENABLE_GEMINI_AI
+        int "Gemini Request Timeout (ms)"
+        default 30000
+        range 5000 60000
+        help
+            Timeout for Gemini API requests in milliseconds.
 endmenu
 
 endmenu

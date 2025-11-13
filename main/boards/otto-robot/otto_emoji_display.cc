@@ -4,10 +4,16 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <font_awesome.h>
+#include <cbin_font.h>
 
 #include <algorithm>
 #include <cstring>
 #include <string>
+
+// External font declaration (PuHui supports Vietnamese)
+extern "C" {
+    LV_FONT_DECLARE(font_puhui_16_4);
+}
 
 #include "display/lcd_display.h"
 #include "application.h"
@@ -58,7 +64,33 @@ OttoEmojiDisplay::OttoEmojiDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
                                    int width, int height, int offset_x, int offset_y, bool mirror_x,
                                    bool mirror_y, bool swap_xy)
     : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy),
-      emotion_gif_(nullptr), use_otto_emoji_(true) {  // Start with Otto GIF mode by default
+      emotion_gif_(nullptr), 
+      use_otto_emoji_(true),  // Start with Otto GIF mode by default
+      drawing_canvas_(nullptr),
+      drawing_canvas_buf_(nullptr),
+      drawing_canvas_enabled_(false),
+      display_on_(true),      // Display starts on
+      auto_off_enabled_(true), // Auto-off enabled by default
+      auto_off_timer_(nullptr) {
+    
+    // Create auto-off timer (5 minutes = 300000 ms)
+    const esp_timer_create_args_t timer_args = {
+        .callback = &OttoEmojiDisplay::AutoOffTimerCallback,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "display_auto_off",
+        .skip_unhandled_events = false
+    };
+    
+    esp_err_t err = esp_timer_create(&timer_args, &auto_off_timer_);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Auto-off timer created (1 hour idle timeout)");
+        // Start timer immediately
+        ResetAutoOffTimer();
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to create auto-off timer: %s", esp_err_to_name(err));
+    }
+    
     SetupGifContainer();
 };
 
@@ -156,13 +188,16 @@ void OttoEmojiDisplay::SetupGifContainer() {
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, lv_color_white(), 0);
+    lv_obj_set_style_text_font(chat_message_label_, &BUILTIN_TEXT_FONT, 0); // Font PuHui hỗ trợ tiếng Việt (16px)
     lv_obj_set_style_border_width(chat_message_label_, 0, 0);
 
     lv_obj_set_style_bg_opa(chat_message_label_, LV_OPA_70, 0);
     lv_obj_set_style_bg_color(chat_message_label_, lv_color_black(), 0);
-    lv_obj_set_style_pad_ver(chat_message_label_, 5, 0);
+    lv_obj_set_style_pad_ver(chat_message_label_, 8, 0); // Tăng padding
+    lv_obj_set_style_pad_hor(chat_message_label_, 10, 0); // Thêm padding ngang
 
-    lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, -40); // Nâng cao hơn: 40px từ đáy
+    lv_obj_move_foreground(chat_message_label_); // Đưa lên trên cùng
 
     preview_image_ = lv_image_create(content_);
     lv_obj_set_size(preview_image_, LV_HOR_RES / 2, LV_VER_RES / 2);
@@ -178,6 +213,9 @@ void OttoEmojiDisplay::SetupGifContainer() {
 
 void OttoEmojiDisplay::SetEmotion(const char* emotion) {
     if (!emotion) return;
+    
+    // Turn on display and reset auto-off timer on activity
+    TurnOn();
     
     // For text emoji mode, directly call parent class without rate limiting
     if (!use_otto_emoji_) {
@@ -238,18 +276,21 @@ void OttoEmojiDisplay::SetEmotion(const char* emotion) {
 void OttoEmojiDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
     if (chat_message_label_ == nullptr) {
+        ESP_LOGW(TAG, "❌ chat_message_label_ is NULL!");
         return;
     }
 
     if (content == nullptr || strlen(content) == 0) {
+        ESP_LOGI(TAG, "🙈 Hiding chat message (empty content)");
         lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
     lv_label_set_text(chat_message_label_, content);
     lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(chat_message_label_); // Đảm bảo luôn ở trên cùng
 
-    ESP_LOGI(TAG, "设置聊天消息 [%s]: %s", role, content);
+    ESP_LOGI(TAG, "💬 Chat message [%s]: %s", role ? role : "unknown", content);
 
     // 🔫 Keyword detection: If user says "súng nè" or "bằng bằng", trigger defend action
     if (strcmp(role, "user") == 0 && content != nullptr) {
@@ -324,5 +365,186 @@ void OttoEmojiDisplay::SetEmojiMode(bool use_otto_emoji) {
         }
         // Set default happy Twemoji
         SetEmotion("happy");
+    }
+}
+
+// UDP Drawing Canvas Implementation
+void OttoEmojiDisplay::EnableDrawingCanvas(bool enable) {
+    DisplayLockGuard lock(this);
+    
+    if (enable == drawing_canvas_enabled_) {
+        return;
+    }
+    
+    drawing_canvas_enabled_ = enable;
+    
+    if (enable) {
+        InitializeDrawingCanvas();
+        ESP_LOGI(TAG, "🎨 Drawing canvas ENABLED");
+    } else {
+        CleanupDrawingCanvas();
+        ESP_LOGI(TAG, "🎨 Drawing canvas DISABLED");
+    }
+}
+
+void OttoEmojiDisplay::InitializeDrawingCanvas() {
+    CleanupDrawingCanvas();  // Clean up any existing canvas
+    
+    // Hide normal UI elements
+    if (content_) {
+        lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (status_bar_) {
+        lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    // Allocate canvas buffer (RGB565 format)
+    size_t buf_size = width_ * height_ * sizeof(lv_color_t);
+    drawing_canvas_buf_ = malloc(buf_size);
+    if (!drawing_canvas_buf_) {
+        ESP_LOGE(TAG, "Failed to allocate drawing canvas buffer (%zu bytes)", buf_size);
+        return;
+    }
+    memset(drawing_canvas_buf_, 0, buf_size);  // Clear to black
+    
+    // Create LVGL canvas
+    drawing_canvas_ = lv_canvas_create(container_);
+    if (!drawing_canvas_) {
+        ESP_LOGE(TAG, "Failed to create LVGL canvas");
+        free(drawing_canvas_buf_);
+        drawing_canvas_buf_ = nullptr;
+        return;
+    }
+    
+    lv_canvas_set_buffer(drawing_canvas_, drawing_canvas_buf_, width_, height_, LV_COLOR_FORMAT_RGB565);
+    lv_obj_set_size(drawing_canvas_, width_, height_);
+    lv_obj_set_pos(drawing_canvas_, 0, 0);
+    lv_canvas_fill_bg(drawing_canvas_, lv_color_black(), LV_OPA_COVER);
+    
+    ESP_LOGI(TAG, "✅ Drawing canvas initialized (%dx%d)", width_, height_);
+}
+
+void OttoEmojiDisplay::CleanupDrawingCanvas() {
+    if (drawing_canvas_) {
+        lv_obj_del(drawing_canvas_);
+        drawing_canvas_ = nullptr;
+    }
+    
+    if (drawing_canvas_buf_) {
+        free(drawing_canvas_buf_);
+        drawing_canvas_buf_ = nullptr;
+    }
+    
+    // Show normal UI elements again
+    if (content_) {
+        lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (status_bar_) {
+        lv_obj_remove_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void OttoEmojiDisplay::ClearDrawingCanvas() {
+    if (!drawing_canvas_) {
+        ESP_LOGW(TAG, "No drawing canvas to clear");
+        return;
+    }
+    
+    DisplayLockGuard lock(this);
+    lv_canvas_fill_bg(drawing_canvas_, lv_color_black(), LV_OPA_COVER);
+    ESP_LOGI(TAG, "Drawing canvas cleared");
+}
+
+void OttoEmojiDisplay::DrawPixel(int x, int y, bool state) {
+    if (!drawing_canvas_) {
+        return;
+    }
+    
+    // Validate coordinates
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) {
+        return;
+    }
+    
+    DisplayLockGuard lock(this);
+    lv_color_t color = state ? lv_color_white() : lv_color_black();
+    lv_canvas_set_px(drawing_canvas_, x, y, color, LV_OPA_COVER);
+}
+
+// ==================== Display Power Management ====================
+
+void OttoEmojiDisplay::AutoOffTimerCallback(void* arg) {
+    OttoEmojiDisplay* display = static_cast<OttoEmojiDisplay*>(arg);
+    if (display && display->auto_off_enabled_) {
+        ESP_LOGI(TAG, "⏱️ Auto-off triggered after 5 min idle");
+        display->TurnOff();
+    }
+}
+
+void OttoEmojiDisplay::ResetAutoOffTimer() {
+    if (!auto_off_timer_ || !auto_off_enabled_) {
+        return;
+    }
+    
+    // Stop existing timer
+    esp_timer_stop(auto_off_timer_);
+    
+    // Start timer for 1 hour (3600000000 microseconds)
+    esp_err_t err = esp_timer_start_once(auto_off_timer_, 3600000000ULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to restart auto-off timer: %s", esp_err_to_name(err));
+    }
+}
+
+void OttoEmojiDisplay::TurnOn() {
+    if (display_on_) {
+        // Already on, just reset timer
+        ResetAutoOffTimer();
+        return;
+    }
+    
+    ESP_LOGI(TAG, "🔆 Turning display ON");
+    
+    // Turn on LCD panel
+    if (panel_) {
+        esp_lcd_panel_disp_on_off(panel_, true);
+    }
+    
+    display_on_ = true;
+    
+    // Reset auto-off timer
+    ResetAutoOffTimer();
+}
+
+void OttoEmojiDisplay::TurnOff() {
+    if (!display_on_) {
+        return;  // Already off
+    }
+    
+    ESP_LOGI(TAG, "🌙 Turning display OFF (idle timeout)");
+    
+    // Turn off LCD panel
+    if (panel_) {
+        esp_lcd_panel_disp_on_off(panel_, false);
+    }
+    
+    display_on_ = false;
+    
+    // Stop auto-off timer
+    if (auto_off_timer_) {
+        esp_timer_stop(auto_off_timer_);
+    }
+}
+
+void OttoEmojiDisplay::SetAutoOffEnabled(bool enabled) {
+    auto_off_enabled_ = enabled;
+    
+    if (enabled && display_on_) {
+        ESP_LOGI(TAG, "✅ Auto-off enabled (1 hour idle timeout)");
+        ResetAutoOffTimer();
+    } else {
+        ESP_LOGI(TAG, "⏸️ Auto-off disabled");
+        if (auto_off_timer_) {
+            esp_timer_stop(auto_off_timer_);
+        }
     }
 }

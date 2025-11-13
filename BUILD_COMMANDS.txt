@@ -1,0 +1,14 @@
+# Quick Build Commands
+# Copy-paste these into ESP-IDF 5.5 PowerShell
+
+# Navigate to project
+cd C:\Users\congh\Downloads\Compressed\xiaozhi-esp32-2.0.3otto2\xiaozhi-esp32-2.0.3
+
+# Build only
+idf.py -B build_otto -D BOARD_TYPE=otto-robot build
+
+# Build and flash
+idf.py -B build_otto -D BOARD_TYPE=otto-robot build flash -p COM31
+
+# Build, flash, and monitor
+idf.py -B build_otto -D BOARD_TYPE=otto-robot build flash monitor -p COM31

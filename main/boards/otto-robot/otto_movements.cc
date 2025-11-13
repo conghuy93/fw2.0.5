@@ -3,6 +3,8 @@
 #include <algorithm>
 
 #include "oscillator.h"
+#include "board.h"
+#include "display/display.h"
 
 static const char* TAG = "OttoMovements";
 
@@ -571,8 +573,8 @@ void Otto::WagTail(int wags, int speed_delay) {
     
     // Center position for tail
     const int tail_center = 90;
-    const int tail_left = 45;
-    const int tail_right = 135;
+    const int tail_left = 30;    // Increased swing angle: was 45, now 30 (more left)
+    const int tail_right = 150;  // Increased swing angle: was 135, now 150 (more right)
     
     // Reset to center first
     ServoAngleSet(SERVO_TAIL, tail_center, 0);
@@ -662,6 +664,200 @@ void Otto::DogPlayDead(int duration_seconds) {
     StandUp();
     
     ESP_LOGI(TAG, "🐕 Play dead completed");
+}
+
+//-- Dog Shake Paw (bắt tay)
+void Otto::DogShakePaw(int shakes, int speed_delay) {
+    ESP_LOGI(TAG, "🤝 Shaking paw %d times (fast mode)", shakes);
+    
+    // Start from standing position
+    Home();
+    vTaskDelay(pdMS_TO_TICKS(50));  // Faster start
+    
+    for (int i = 0; i < shakes; i++) {
+        // Shift weight slightly to left for balance (faster servo movement)
+        // RF uses inverted angles (180 - angle) so: 180-105=75
+        ServoAngleSet(SERVO_LF, 80, 0);
+        ServoAngleSet(SERVO_RF, 75, 0);  // 180-105 = 75
+        ServoAngleSet(SERVO_LB, 70, 0);
+        ServoAngleSet(SERVO_RB, 110, speed_delay / 2);  // Faster weight shift
+        vTaskDelay(pdMS_TO_TICKS(40));  // Faster delay
+        
+        // Lift right front paw (RF to high position) - CHANGED: 0° for 180° actual angle
+        // 180-180 = 0 (RF inverted) - lift higher!
+        ServoAngleSet(SERVO_RF, 0, speed_delay / 4);  // Even faster servo speed
+        vTaskDelay(pdMS_TO_TICKS(150));  // Faster hold
+        
+        // Put paw down quickly
+        ServoAngleSet(SERVO_RF, 90, speed_delay / 4);  // Faster down movement
+        vTaskDelay(pdMS_TO_TICKS(40));  // Faster delay
+    }
+    
+    // Return to standing
+    Home();
+    ESP_LOGI(TAG, "🤝 Shake paw completed (fast & high)");
+}
+
+//-- Dog Wave Left Foot (vẫy chân trái)
+//-- Dog Sidestep (đi ngang)
+void Otto::DogSidestep(int steps, int speed_delay, int direction) {
+    ESP_LOGI(TAG, "⬅️➡️ Sidestepping %d steps, direction=%d", steps, direction);
+    
+    // direction: 1 = right, -1 = left
+    StandUp();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    for (int i = 0; i < steps; i++) {
+        if (direction > 0) {
+            // Sidestep RIGHT: lift left side, shift right
+            ServoAngleSet(SERVO_LF, 120, 0);  // Lift left front
+            ServoAngleSet(SERVO_RF, 80, 0);   // Plant right front
+            ServoAngleSet(SERVO_LB, 120, 0);  // Lift left back
+            ServoAngleSet(SERVO_RB, 80, speed_delay);  // Plant right back
+            vTaskDelay(pdMS_TO_TICKS(speed_delay));
+            
+            // Plant left, lift right
+            ServoAngleSet(SERVO_LF, 80, 0);   // Plant left front
+            ServoAngleSet(SERVO_RF, 120, 0);  // Lift right front
+            ServoAngleSet(SERVO_LB, 80, 0);   // Plant left back
+            ServoAngleSet(SERVO_RB, 120, speed_delay);  // Lift right back
+            vTaskDelay(pdMS_TO_TICKS(speed_delay));
+        } else {
+            // Sidestep LEFT: lift right side, shift left
+            ServoAngleSet(SERVO_LF, 80, 0);   // Plant left front
+            ServoAngleSet(SERVO_RF, 120, 0);  // Lift right front
+            ServoAngleSet(SERVO_LB, 80, 0);   // Plant left back
+            ServoAngleSet(SERVO_RB, 120, speed_delay);  // Lift right back
+            vTaskDelay(pdMS_TO_TICKS(speed_delay));
+            
+            // Lift left, plant right
+            ServoAngleSet(SERVO_LF, 120, 0);  // Lift left front
+            ServoAngleSet(SERVO_RF, 80, 0);   // Plant right front
+            ServoAngleSet(SERVO_LB, 120, 0);  // Lift left back
+            ServoAngleSet(SERVO_RB, 80, speed_delay);  // Plant right back
+            vTaskDelay(pdMS_TO_TICKS(speed_delay));
+        }
+    }
+    
+    Home();
+    ESP_LOGI(TAG, "⬅️➡️ Sidestep completed");
+}
+
+//-- Dog Pushup (chống đẩy)
+void Otto::DogPushup(int pushups, int speed_delay) {
+    ESP_LOGI(TAG, "💪 Doing %d pushups", pushups);
+    
+    // Start in lie down position
+    DogLieDown(speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    for (int i = 0; i < pushups; i++) {
+        // Push up - front legs extend, back legs stay down
+        ServoAngleSet(SERVO_LF, 35, 0);   // Front legs high
+        ServoAngleSet(SERVO_RF, 35, 0);
+        ServoAngleSet(SERVO_LB, 95, 0);   // Back legs low (neutral-ish)
+        ServoAngleSet(SERVO_RB, 95, speed_delay * 2);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        
+        // Down - front legs bend back down
+        ServoAngleSet(SERVO_LF, 100, 0);   // Front legs down
+        ServoAngleSet(SERVO_RF, 100, 0);
+        ServoAngleSet(SERVO_LB, 95, 0);   // Back legs stay
+        ServoAngleSet(SERVO_RB, 95, speed_delay * 2);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    
+    // Return to standing
+    StandUp();
+    ESP_LOGI(TAG, "💪 Pushup completed");
+}
+
+//-- Dog Toilet (đi vệ sinh / squat pose)
+void Otto::DogToilet(int hold_ms, int speed_delay) {
+    ESP_LOGI(TAG, "🚽 Starting toilet squat pose, hold %d ms", hold_ms);
+
+    // Move to a sitting position first for stability
+    DogSitDown(speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    // Squat pose: lower hind legs further, front legs slightly forward
+    // Angles chosen empirically relative to pushup/balance positions
+    ServoAngleSet(SERVO_LF, 100, 0);  // Front moderate
+    ServoAngleSet(SERVO_RF, 100, 0);
+    ServoAngleSet(SERVO_LB, 130, 0);  // Hind deeper
+    ServoAngleSet(SERVO_RB, 130, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    // Small tail wag for realism if tail servo exists
+    WagTail(2, 120);
+
+    // Hold squat
+    vTaskDelay(pdMS_TO_TICKS(hold_ms));
+
+    // Return via sit then home
+    DogSitDown(speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    Home();
+    ESP_LOGI(TAG, "🚽 Toilet pose complete");
+}
+
+//-- Dog Balance (đứng 2 chân sau - stand on hind legs like kiki-robot)
+void Otto::DogBalance(int duration_ms, int speed_delay) {
+    ESP_LOGI(TAG, "⚖️ Balancing on hind legs for %d ms", duration_ms);
+    
+    // Show neutral emotion
+    auto display = Board::GetInstance().GetDisplay();
+    if (display) {
+        display->SetEmotion("neutral");
+    }
+    
+    // Prepare: shift weight back gradually (same as kiki-robot)
+    ServoAngleSet(SERVO_LF, 70, 0);
+    ServoAngleSet(SERVO_RF, 70, 0);
+    ServoAngleSet(SERVO_LB, 60, 0);
+    ServoAngleSet(SERVO_RB, 60, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    // Lift front legs gradually - stage 1
+    ServoAngleSet(SERVO_LF, 100, 0);
+    ServoAngleSet(SERVO_RF, 100, 0);
+    ServoAngleSet(SERVO_LB, 50, 0);
+    ServoAngleSet(SERVO_RB, 50, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    
+    // Lift front legs more - stage 2
+    ServoAngleSet(SERVO_LF, 120, 0);
+    ServoAngleSet(SERVO_RF, 120, 0);
+    ServoAngleSet(SERVO_LB, 45, 0);
+    ServoAngleSet(SERVO_RB, 45, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    
+    // Balance position - front legs high (LF/RF=140°, LB/RB=40° from kiki-robot)
+    ServoAngleSet(SERVO_LF, 140, 0);
+    ServoAngleSet(SERVO_RF, 140, 0);
+    ServoAngleSet(SERVO_LB, 40, 0);
+    ServoAngleSet(SERVO_RB, 40, speed_delay * 2);
+    
+    // Hold balance
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    
+    // Slowly return down - stage 1
+    ServoAngleSet(SERVO_LF, 110, 0);
+    ServoAngleSet(SERVO_RF, 110, 0);
+    ServoAngleSet(SERVO_LB, 50, 0);
+    ServoAngleSet(SERVO_RB, 50, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    
+    // Return to standing - stage 2
+    ServoAngleSet(SERVO_LF, 90, 0);
+    ServoAngleSet(SERVO_RF, 90, 0);
+    ServoAngleSet(SERVO_LB, 75, 0);
+    ServoAngleSet(SERVO_RB, 75, speed_delay * 2);
+    vTaskDelay(pdMS_TO_TICKS(300));
+    
+    // Return to home position
+    Home();
+    ESP_LOGI(TAG, "⚖️ Balance completed");
 }
 
 ///////////////////////////////////////////////////////////////////

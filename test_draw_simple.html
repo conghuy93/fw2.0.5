@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Otto Drawing Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        h1 { color: #4CAF50; }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            margin: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover { background: #45a049; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .status {
+            background: #2a2a2a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .log {
+            background: #000;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: #4CAF50; }
+        .error { color: #f44336; }
+        .info { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <h1>🎨 Otto Drawing Test</h1>
+    
+    <div class="status" id="status">Status: Not Connected</div>
+    
+    <div>
+        <button onclick="testLine()">Test Line (Diagonal)</button>
+        <button onclick="testBox()">Test Box</button>
+        <button onclick="testDots()">Test Random Dots</button>
+        <button onclick="clearCanvas()">Clear Canvas</button>
+    </div>
+    
+    <div class="log" id="log"></div>
+
+    <script>
+        const IP = '192.168.0.45';
+        let isDrawing = false;
+
+        function log(msg, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'error' : type === 'success' ? 'success' : 'info';
+            logDiv.innerHTML += `<div class="${color}">[${time}] ${msg}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function enableDrawing() {
+            if (isDrawing) return;
+            
+            try {
+                const response = await fetch(`http://${IP}/drawing_mode?enable=1`);
+                const data = await response.json();
+                isDrawing = true;
+                document.getElementById('status').textContent = 'Status: Drawing Mode ENABLED';
+                log('✅ Drawing mode enabled', 'success');
+            } catch (error) {
+                log(`❌ Failed to enable drawing: ${error}`, 'error');
+            }
+        }
+
+        async function drawPixel(x, y, state = 1) {
+            try {
+                const url = `http://${IP}/drawing_pixel?x=${x}&y=${y}&state=${state}`;
+                await fetch(url);
+                return true;
+            } catch (error) {
+                log(`❌ Failed to draw pixel (${x},${y}): ${error}`, 'error');
+                return false;
+            }
+        }
+
+        async function testLine() {
+            log('🖊️ Drawing diagonal line...', 'info');
+            await enableDrawing();
+            
+            // Draw line from (20,20) to (220,260)
+            for (let i = 0; i <= 200; i += 5) {
+                const x = 20 + i;
+                const y = 20 + Math.floor(i * 1.2);
+                await drawPixel(x, y, 1);
+            }
+            
+            log('✅ Diagonal line complete', 'success');
+        }
+
+        async function testBox() {
+            log('📦 Drawing box...', 'info');
+            await enableDrawing();
+            
+            const x1 = 50, y1 = 50, x2 = 190, y2 = 230;
+            
+            // Top and bottom
+            for (let x = x1; x <= x2; x += 3) {
+                await drawPixel(x, y1, 1);
+                await drawPixel(x, y2, 1);
+            }
+            
+            // Left and right
+            for (let y = y1; y <= y2; y += 3) {
+                await drawPixel(x1, y, 1);
+                await drawPixel(x2, y, 1);
+            }
+            
+            log('✅ Box complete', 'success');
+        }
+
+        async function testDots() {
+            log('🎲 Drawing random dots...', 'info');
+            await enableDrawing();
+            
+            for (let i = 0; i < 50; i++) {
+                const x = Math.floor(Math.random() * 240);
+                const y = Math.floor(Math.random() * 280);
+                await drawPixel(x, y, 1);
+            }
+            
+            log('✅ 50 random dots drawn', 'success');
+        }
+
+        async function clearCanvas() {
+            log('🧹 Clearing canvas...', 'info');
+            
+            try {
+                await fetch(`http://${IP}/drawing_clear`);
+                log('✅ Canvas cleared', 'success');
+            } catch (error) {
+                log(`❌ Failed to clear: ${error}`, 'error');
+            }
+        }
+
+        // Auto-connect on load
+        window.onload = async () => {
+            log(`🔗 Connecting to Otto at ${IP}...`, 'info');
+            try {
+                const response = await fetch(`http://${IP}/drawing_status`);
+                const data = await response.json();
+                log(`✅ Connected to Otto!`, 'success');
+                log(`📊 Stats: ${data.packets_received} packets, ${data.pixels_drawn} pixels`, 'info');
+            } catch (error) {
+                log(`❌ Cannot connect to ${IP}`, 'error');
+                log(`💡 Make sure Otto is connected to WiFi`, 'info');
+            }
+        };
+    </script>
+</body>
+</html>

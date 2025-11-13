@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "ota.h"
 // For Otto GIF/text emoji mode toggling
 #include "boards/otto-robot/otto_emoji_display.h"
 // For Otto movement actions from voice
@@ -21,6 +22,7 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
+#include <nvs_flash.h>
 
 #define TAG "Application"
 
@@ -218,8 +220,13 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         digit_sound{'9', Lang::Sounds::OGG_9}
     }};
 
+    // Lock emotion to force "winking" and prevent MCP from overriding
+    emotion_locked_ = true;
+    ESP_LOGI(TAG, "🔒 Emotion LOCKED for QR code display (winking)");
+
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
+    // Use "winking" emotion instead of "link" to show playful face when displaying QR code
+    Alert(Lang::Strings::ACTIVATION, message.c_str(), "winking", Lang::Sounds::OGG_ACTIVATION);
 
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
@@ -228,6 +235,17 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
             audio_service_.PlaySound(it->sound);
         }
     }
+    
+    // Unlock emotion after QR code is displayed (15 seconds should be enough)
+    xTaskCreate([](void* arg) {
+        vTaskDelay(pdMS_TO_TICKS(15000));  // Keep winking for 15 seconds
+        Application* app = static_cast<Application*>(arg);
+        app->Schedule([app]() {
+            app->emotion_locked_ = false;
+            ESP_LOGI("Application", "🔓 Emotion UNLOCKED after QR code display");
+        });
+        vTaskDelete(NULL);
+    }, "qr_emotion_unlock", 2048, this, 1, NULL);
 }
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
@@ -440,7 +458,8 @@ void Application::Start() {
         board.SetPowerSaveMode(true);
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
-            display->SetChatMessage("system", "");
+            // Don't clear chat message on audio channel close to preserve conversation history
+            // display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
         });
     });
@@ -459,6 +478,10 @@ void Application::Start() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (device_state_ == kDeviceStateSpeaking) {
+                        // Clear chat message when TTS stops
+                        auto display = Board::GetInstance().GetDisplay();
+                        display->SetChatMessage("", "");
+                        
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -470,7 +493,11 @@ void Application::Start() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring)]() {
+                    
+                    std::string assistant_msg = text->valuestring;
+                    
+                    // Display message immediately (Gemini check happens at TTS stop)
+                    Schedule([this, display, message = assistant_msg]() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
                 }
@@ -478,13 +505,34 @@ void Application::Start() {
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
-                ESP_LOGI(TAG, ">> %s", text->valuestring);
+                std::string message = text->valuestring;
+                
+                // Skip only truly empty messages
+                if (message.empty()) {
+                    ESP_LOGI(TAG, "Ignoring empty STT message from server");
+                    return;
+                }
+                
+                // Skip old-style placeholder wake words (for backward compatibility)
+                if (message == "web_ui" || message == "text_input" || message == "web_input" || message == "text input") {
+                    ESP_LOGI(TAG, "Ignoring legacy placeholder STT message from server: %s", message.c_str());
+                    return;
+                }
+                
+                // Skip echo of wake word from web UI (server echoes back the wake word we sent)
+                if (!last_web_wake_word_.empty() && message == last_web_wake_word_) {
+                    ESP_LOGI(TAG, "Skipping echo of web wake word from server: %s", message.c_str());
+                    last_web_wake_word_.clear();  // Clear after skipping once
+                    return;
+                }
+                
+                ESP_LOGI(TAG, ">> %s", message.c_str());
                 
                 // Voice command: special action sequence
-                // Phrase example (Vietnamese): "lấy súng bắn nè bằng bằng"
+                // Phrase example (Vietnamese): "súng nè", "bắn", "bang bang", "bùm"
                 // Behavior: walk back 1 step (speed 15), sit down, then lie down slowly; show shocked emoji
-                // Also accept unaccented form: "lay sung ban ne bang bang"
-                std::string phrase = text->valuestring;
+                // Also accept unaccented form: "sung ne", "ban", "bang bang", "bum"
+                std::string phrase = message;
                 auto to_lower = [](std::string s) {
                     for (auto &ch : s) ch = (char)tolower((unsigned char)ch);
                     return s;
@@ -497,14 +545,14 @@ void Application::Start() {
                 ESP_LOGI(TAG, "🎤 STT voice command check: original='%s' lower='%s'", phrase.c_str(), lower.c_str());
 
                 bool shoot_seq =
-                    // Full phrase (with and without accents)
-                    contains(lower, "lấy súng bắn nè bằng bằng") ||
-                    contains(lower, "lay sung ban ne bang bang") ||
-                    // Short variants requested
+                    // Shooting keywords (accented and unaccented)
                     contains(lower, "súng nè") ||
                     contains(lower, "sung ne") ||
-                    contains(lower, "bằng bằng") ||
-                    contains(lower, "bang bang");
+                    contains(lower, "bắn") ||
+                    contains(lower, "ban") ||
+                    contains(lower, "bang bang") ||
+                    contains(lower, "bùm") ||
+                    contains(lower, "bum");
                     
                 ESP_LOGI(TAG, "🎯 Shoot sequence match: %s", shoot_seq ? "YES ✅" : "NO ❌");
                 
@@ -525,6 +573,21 @@ void Application::Start() {
                           contains(lower, "chào") || contains(lower, "chao");
                 bool show_ip = contains(lower, "192168") || contains(lower, "một chín hai") || 
                               contains(lower, "mot chin hai") || contains(lower, "ip address");
+                bool open_panel = contains(lower, "mở bảng điều khiển") || contains(lower, "mo bang dieu khien") ||
+                                 contains(lower, "bảng điều khiển") || contains(lower, "bang dieu khien") ||
+                                 contains(lower, "mở trang điều khiển") || contains(lower, "mo trang dieu khien") ||
+                                 contains(lower, "mở web") || contains(lower, "mo web");
+                bool show_qr = contains(lower, "mở qr") || contains(lower, "mo qr") || 
+                              contains(lower, "mở mã qr") || contains(lower, "mo ma qr") ||
+                              contains(lower, "hiển thị qr") || contains(lower, "hien thi qr") ||
+                              contains(lower, "mở mạng qr") || contains(lower, "mo mang qr");
+
+                // New voice pose triggers
+                bool toilet_pose = contains(lower, "đi vệ sinh") || contains(lower, "di ve sinh") ||
+                                   contains(lower, "đi toilet") || contains(lower, "di toilet");
+                bool pushup_pose = contains(lower, "chống đẩy") || contains(lower, "chong day") ||
+                                   contains(lower, "tập thể dục") || contains(lower, "tap the duc") ||
+                                   contains(lower, "hít đất") || contains(lower, "hit dat");
                 
                 if (shoot_seq) {
                     ESP_LOGI(TAG, "🔫 EXECUTING shoot/defend sequence NOW! (No text display, only emoji)");
@@ -562,6 +625,49 @@ void Application::Start() {
                     });
                     ESP_LOGI(TAG, "✅ Shoot/defend sequence scheduled, returning now (no chat message)");
                     return; // handled - skip SetChatMessage
+                }
+                
+                if (show_qr) {
+                    ESP_LOGI(TAG, "📱 QR keyword detected: showing winking emoji for 30s (no movement, no IP, no activation code)");
+                    // Lock emotion immediately so other actions cannot override during display period
+                    emotion_locked_ = true;
+                    Schedule([this]() {
+                        if (auto disp = Board::GetInstance().GetDisplay()) {
+                            // Show only winking emoji, no chat/status text
+                            disp->SetEmotion("winking");
+                        }
+                        // Unlock after 30 seconds
+                        xTaskCreate([](void* arg) {
+                            vTaskDelay(pdMS_TO_TICKS(30000)); // 30s display duration
+                            Application* app = static_cast<Application*>(arg);
+                            app->Schedule([app]() {
+                                app->emotion_locked_ = false;
+                                ESP_LOGI("Application", "🔓 Emotion UNLOCKED after QR winking display");
+                            });
+                            vTaskDelete(NULL);
+                        }, "qr_wink_unlock", 2048, this, 1, NULL);
+                    });
+                    return; // handled
+                }
+
+                if (pushup_pose) {
+                    ESP_LOGI(TAG, "💪 Voice trigger: pushup exercise");
+                    Schedule([this]() {
+                        if (auto disp = Board::GetInstance().GetDisplay()) disp->SetEmotion("happy");
+                        // Default 3 pushups speed 150
+                        otto_controller_queue_action(ACTION_DOG_PUSHUP, 3, 150, 0, 0);
+                    });
+                    return; // handled
+                }
+
+                if (toilet_pose) {
+                    ESP_LOGI(TAG, "🚽 Voice trigger: toilet squat pose");
+                    Schedule([this]() {
+                        if (auto disp = Board::GetInstance().GetDisplay()) disp->SetEmotion("embarrassed");
+                        // Hold 3000 ms, speed base 150
+                        otto_controller_queue_action(ACTION_DOG_TOILET, 3000, 150, 0, 0);
+                    });
+                    return; // handled
                 }
                 
                 // Instant action commands - execute immediately without LLM
@@ -611,11 +717,11 @@ void Application::Start() {
                     return;
                 }
                 if (dance) {
-                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Dance");
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Dance 4 Feet");
                     Schedule([this]() {
                         auto disp = Board::GetInstance().GetDisplay();
                         disp->SetEmotion("happy");
-                        otto_controller_queue_action(ACTION_DOG_DANCE, 3, 200, 0, 0);
+                        otto_controller_queue_action(ACTION_DOG_DANCE_4_FEET, 3, 200, 0, 0);
                     });
                     return;
                 }
@@ -629,7 +735,7 @@ void Application::Start() {
                     return;
                 }
                 if (show_ip) {
-                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Show WiFi IP Address");
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Show WiFi IP Address for 30s");
                     Schedule([this]() {
                         auto disp = Board::GetInstance().GetDisplay();
                         disp->SetEmotion("happy");
@@ -644,9 +750,67 @@ void Application::Start() {
                             ESP_LOGI("Application", "\033[1;33m🌟 Station IP: " IPSTR "\033[0m", 
                                      IP2STR(&ip_info.ip));
                             disp->SetChatMessage("system", ip_str);
+                            // Keep display for 30 seconds
+                            xTaskCreate([](void* arg) {
+                                vTaskDelay(pdMS_TO_TICKS(30000));
+                                auto d = Board::GetInstance().GetDisplay();
+                                if (d) {
+                                    d->SetEmotion("neutral");
+                                    d->SetChatMessage("", "");
+                                }
+                                ESP_LOGI("Application", "🔓 IP display cleared after 30s");
+                                vTaskDelete(NULL);
+                            }, "ip_clear", 2048, nullptr, 1, NULL);
                         } else {
                             ESP_LOGE("Application", "❌ Failed to get IP info");
                             disp->SetChatMessage("system", "WiFi chưa kết nối!");
+                        }
+                    });
+                    return;
+                }
+                if (open_panel) {
+                    ESP_LOGI(TAG, "⚡ INSTANT ACTION: Open Control Panel (Start Webserver + Show IP)");
+                    Schedule([this]() {
+                        // Check if webserver is already running
+                        extern bool webserver_enabled;
+                        auto disp = Board::GetInstance().GetDisplay();
+                        
+                        if (!webserver_enabled) {
+                            ESP_LOGI(TAG, "🌐 Starting webserver for control panel access");
+                            otto_start_webserver();
+                        } else {
+                            ESP_LOGI(TAG, "🌐 Webserver already running");
+                        }
+                        
+                        // Display IP address with happy emoji for 15 seconds
+                        if (disp) {
+                            disp->SetEmotion("happy");
+                            
+                            // Get and display IP address
+                            esp_netif_ip_info_t ip_info;
+                            esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                            if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+                                char ip_str[64];
+                                snprintf(ip_str, sizeof(ip_str), "📱 IP: %d.%d.%d.%d", 
+                                         IP2STR(&ip_info.ip));
+                                ESP_LOGI("Application", "🌟 Station IP: " IPSTR, IP2STR(&ip_info.ip));
+                                disp->SetChatMessage("system", ip_str);
+                                
+                                // Keep display for 15 seconds
+                                xTaskCreate([](void* arg) {
+                                    vTaskDelay(pdMS_TO_TICKS(15000));
+                                    auto d = Board::GetInstance().GetDisplay();
+                                    if (d) {
+                                        d->SetEmotion("neutral");
+                                        d->SetChatMessage("", "");
+                                    }
+                                    ESP_LOGI("Application", "🔓 IP display cleared after 15s");
+                                    vTaskDelete(NULL);
+                                }, "panel_ip_clear", 2048, nullptr, 1, NULL);
+                            } else {
+                                ESP_LOGE("Application", "❌ Failed to get IP info");
+                                disp->SetChatMessage("system", "✅ Web server đã khởi động!");
+                            }
                         }
                     });
                     return;
@@ -850,6 +1014,17 @@ void Application::OnWakeWordDetected() {
     }
 
     if (device_state_ == kDeviceStateIdle) {
+        // Wake up display immediately when wake word is detected
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetPowerSaveMode(false);
+        }
+        auto backlight = Board::GetInstance().GetBacklight();
+        if (backlight) {
+            backlight->RestoreBrightness();
+        }
+        ESP_LOGI(TAG, "🔆 Display turned on by wake word detection");
+        
         audio_service_.EncodeWakeWord();
 
         if (!protocol_->IsAudioChannelOpened()) {
@@ -863,6 +1038,9 @@ void Application::OnWakeWordDetected() {
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
 #if CONFIG_SEND_WAKE_WORD_DATA
+        // Play the pop up sound to indicate the wake word is detected
+        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+        
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             protocol_->SendAudio(std::move(packet));
@@ -1101,4 +1279,346 @@ void Application::SetAecMode(AecMode mode) {
 
 void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
+}
+
+void Application::SendSttMessage(const std::string& text) {
+    if (!protocol_) {
+        ESP_LOGE(TAG, "Protocol not initialized");
+        return;
+    }
+
+    // Validate text length (max 1500 chars)
+    std::string validated_text = text;
+    if (validated_text.length() > 1500) {
+        ESP_LOGW(TAG, "Text too long, truncating to 1500 chars");
+        validated_text = validated_text.substr(0, 1500);
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->ShowNotification("Text quá dài, đã cắt bớt");
+        }
+    }
+
+    if (validated_text.empty()) {
+        ESP_LOGE(TAG, "Empty text");
+        return;
+    }
+
+    ESP_LOGI(TAG, "SendSttMessage: %s", validated_text.c_str());
+
+    // Check for special keywords that should be handled locally (not sent to server)
+    auto to_lower = [](std::string s) {
+        for (auto &ch : s) ch = (char)tolower((unsigned char)ch);
+        return s;
+    };
+    auto contains = [](const std::string &hay, const char* needle) {
+        return hay.find(needle) != std::string::npos;
+    };
+    std::string lower = to_lower(validated_text);
+    
+    // Check for QR code display keywords
+    bool show_qr = contains(lower, "mở qr") || contains(lower, "mo qr") || 
+                  contains(lower, "mở mã qr") || contains(lower, "mo ma qr") ||
+                  contains(lower, "hiển thị qr") || contains(lower, "hien thi qr") ||
+                  contains(lower, "mở mạng qr") || contains(lower, "mo mang qr");
+    
+    if (show_qr) {
+        ESP_LOGI(TAG, "🔒 QR CODE keyword detected - handling locally (no server send)");
+        // Lock emotion IMMEDIATELY
+        emotion_locked_ = true;
+        ESP_LOGI(TAG, "🔒 Emotion LOCKED for QR code display (winking)");
+        
+        Schedule([this]() {
+            auto disp = Board::GetInstance().GetDisplay();
+            // Display user message first
+            disp->SetChatMessage("user", "Mở mã QR");
+            
+            // Get Station IP address instead of activation code
+            esp_netif_ip_info_t ip_info;
+            esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            
+            if (!netif || esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
+                ESP_LOGW(TAG, "⚠️ No WiFi connection - cannot show IP QR");
+                disp->SetEmotion("sad");
+                disp->SetChatMessage("system", "WiFi chưa kết nối!");
+                emotion_locked_ = false;
+            } else {
+                // Display winking emotion with IP address
+                disp->SetEmotion("winking");
+                
+                char ip_url[128];
+                snprintf(ip_url, sizeof(ip_url), "🌐 http://%d.%d.%d.%d", IP2STR(&ip_info.ip));
+                disp->SetChatMessage("system", ip_url);
+                
+                ESP_LOGI(TAG, "📱 Displaying IP QR with winking: " IPSTR, IP2STR(&ip_info.ip));
+                
+                // Unlock emotion after 15 seconds
+                xTaskCreate([](void* arg) {
+                    vTaskDelay(pdMS_TO_TICKS(15000));
+                    Application* app = static_cast<Application*>(arg);
+                    app->Schedule([app]() {
+                        app->emotion_locked_ = false;
+                        ESP_LOGI("Application", "🔓 Emotion UNLOCKED after IP QR display");
+                    });
+                    vTaskDelete(NULL);
+                }, "qr_unlock", 2048, this, 1, NULL);
+            }
+        });
+        return; // Skip sending to server
+    }
+
+    // Display the user's text message on screen
+    auto display = Board::GetInstance().GetDisplay();
+    if (display) {
+        display->SetChatMessage("user", validated_text.c_str());
+    }
+
+    // Open audio channel if not already open
+    if (!protocol_->IsAudioChannelOpened()) {
+        SetDeviceState(kDeviceStateConnecting);
+        if (!protocol_->OpenAudioChannel()) {
+            ESP_LOGE(TAG, "Failed to open audio channel");
+            SetDeviceState(kDeviceStateIdle);
+            return;
+        }
+    }
+    
+    // Save current device state to restore later if server doesn't respond
+    DeviceState previous_state = device_state_;
+    bool was_voice_processing = audio_service_.IsAudioProcessorRunning();
+    bool was_wake_word_detection = audio_service_.IsWakeWordRunning();
+    
+    // Set device to listening state
+    SetDeviceState(kDeviceStateListening);
+
+    // Determine wake word: use actual text if short enough, otherwise use first 32 chars
+    // Server needs wake word to establish context, so sending actual user text is better than "web_ui"
+    std::string wake_word_to_send;
+    if (validated_text.length() <= 32) {
+        // Text is short enough to use as wake word
+        wake_word_to_send = validated_text;
+    } else {
+        // Text is too long, use first 32 chars (break at word boundary if possible)
+        size_t break_pos = 32;
+        for (size_t i = 31; i > 0; i--) {
+            if (validated_text[i] == ' ' || validated_text[i] == '\n' || validated_text[i] == '\t') {
+                break_pos = i;
+                break;
+            }
+        }
+        wake_word_to_send = validated_text.substr(0, break_pos);
+        // Trim trailing whitespace
+        while (!wake_word_to_send.empty() && 
+               (wake_word_to_send.back() == ' ' || wake_word_to_send.back() == '\n' || wake_word_to_send.back() == '\t')) {
+            wake_word_to_send.pop_back();
+        }
+    }
+    
+    // Send wake word detected message with actual user text (or excerpt)
+    protocol_->SendWakeWordDetected(wake_word_to_send);
+    ESP_LOGI(TAG, "Sent wake word: %s", wake_word_to_send.c_str());
+    
+    // Store wake word to skip echo from server
+    last_web_wake_word_ = wake_word_to_send;
+
+    // Split text into chunks (max 32 chars OR max 10 words per chunk)
+    std::vector<std::string> chunks;
+    size_t pos = 0;
+    
+    while (pos < validated_text.length()) {
+        size_t chunk_end = pos + 32; // Max 32 chars
+        
+        // If we're not at the end, try to break at word boundary
+        if (chunk_end < validated_text.length()) {
+            // Count words in this chunk
+            int word_count = 0;
+            size_t word_break = pos;
+            for (size_t i = pos; i < chunk_end && i < validated_text.length(); ++i) {
+                if (validated_text[i] == ' ' || validated_text[i] == '\n' || validated_text[i] == '\t') {
+                    word_count++;
+                    word_break = i + 1;
+                    if (word_count >= 10) {
+                        chunk_end = word_break;
+                        break;
+                    }
+                }
+            }
+            
+            // If no space found, use char limit
+            if (word_break == pos) {
+                // Find last space before chunk_end
+                for (size_t i = chunk_end; i > pos; --i) {
+                    if (validated_text[i] == ' ' || validated_text[i] == '\n' || validated_text[i] == '\t') {
+                        chunk_end = i + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        chunk_end = std::min(chunk_end, validated_text.length());
+        std::string chunk = validated_text.substr(pos, chunk_end - pos);
+        
+        // Trim whitespace
+        size_t start = chunk.find_first_not_of(" \t\n\r");
+        size_t end = chunk.find_last_not_of(" \t\n\r");
+        if (start != std::string::npos && end != std::string::npos) {
+            chunks.push_back(chunk.substr(start, end - start + 1));
+        }
+        
+        pos = chunk_end;
+    }
+
+    // Send STT messages for each chunk
+    int chunk_index = 0;
+    bool is_chunk = chunks.size() > 1;
+    for (const auto& chunk : chunks) {
+        // Escape special characters for JSON
+        std::string escaped_text;
+        escaped_text.reserve(chunk.length() * 2);
+        for (char c : chunk) {
+            switch (c) {
+                case '"':  escaped_text += "\\\""; break;
+                case '\\': escaped_text += "\\\\"; break;
+                case '\b': escaped_text += "\\b"; break;
+                case '\f': escaped_text += "\\f"; break;
+                case '\n': escaped_text += "\\n"; break;
+                case '\r': escaped_text += "\\r"; break;
+                case '\t': escaped_text += "\\t"; break;
+                default:
+                    if (c < 32) {
+                        char buf[7];
+                        snprintf(buf, sizeof(buf), "\\u%04x", c);
+                        escaped_text += buf;
+                    } else {
+                        escaped_text += c;
+                    }
+                    break;
+            }
+        }
+
+        ESP_LOGI(TAG, "Sending STT chunk %d: %s", chunk_index, escaped_text.c_str());
+        protocol_->SendUserText(escaped_text, is_chunk, chunk_index);
+        chunk_index++;
+        
+        // Wait 5.5 seconds between chunks (except for the last chunk)
+        // This prevents server timeout and allows AI to process each chunk
+        if (chunk_index < (int)chunks.size()) {
+            ESP_LOGI(TAG, "Waiting 5.5 seconds before sending next chunk...");
+            vTaskDelay(pdMS_TO_TICKS(5500));
+        }
+    }
+
+    ESP_LOGI(TAG, "Sent %zu STT chunks", chunks.size());
+    
+    // Send stop listening after all chunks
+    vTaskDelay(pdMS_TO_TICKS(500));
+    protocol_->SendStopListening();
+    ESP_LOGI(TAG, "Sent stop listening signal");
+    
+    // Schedule timeout handler: if server doesn't respond in 8s, restore previous state
+    Schedule([this, previous_state, was_voice_processing, was_wake_word_detection]() {
+        vTaskDelay(pdMS_TO_TICKS(8000));  // Wait 8 seconds for server response
+        if (device_state_ == kDeviceStateListening) {
+            // No response from server, reset to previous state
+            ESP_LOGI(TAG, "⚠️ No server response after 8s, resetting to %s state", 
+                     previous_state == kDeviceStateIdle ? "idle" : 
+                     previous_state == kDeviceStateSpeaking ? "speaking" : "previous");
+            SetDeviceState(previous_state == kDeviceStateSpeaking ? kDeviceStateIdle : previous_state);
+            if (device_state_ != kDeviceStateListening) {
+                audio_service_.EnableVoiceProcessing(was_voice_processing);
+                audio_service_.EnableWakeWordDetection(was_wake_word_detection);
+            }
+        }
+    });
+}
+
+void Application::OpenControlPanel() {
+    auto disp = Board::GetInstance().GetDisplay();
+    
+    // Get Station IP address
+    esp_netif_ip_info_t ip_info;
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    
+    if (!netif || esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Failed to get IP - cannot open control panel");
+        disp->SetEmotion("sad");
+        disp->SetChatMessage("system", "WiFi chưa kết nối!");
+        return;
+    }
+    
+    // Start webserver if not already running
+    if (!webserver_enabled) {
+        ESP_LOGI(TAG, "🌐 Starting webserver for control panel");
+        otto_start_webserver();
+    }
+    
+    // Format IP address
+    char ip_str[64];
+    snprintf(ip_str, sizeof(ip_str), "🌐 http://%d.%d.%d.%d", IP2STR(&ip_info.ip));
+    
+    ESP_LOGI(TAG, "\033[1;32m🌟 Opening Control Panel: " IPSTR "\033[0m", IP2STR(&ip_info.ip));
+    
+    // Display IP on screen
+    disp->SetEmotion("happy");
+    disp->SetChatMessage("system", ip_str);
+    
+    // Cancel existing timer if any
+    if (control_panel_timer_handle_ != nullptr) {
+        esp_timer_stop(control_panel_timer_handle_);
+        esp_timer_delete(control_panel_timer_handle_);
+        control_panel_timer_handle_ = nullptr;
+        ESP_LOGI(TAG, "🔄 Cancelled previous control panel timer");
+    }
+    
+    // Create 5-minute auto-close timer
+    esp_timer_create_args_t timer_args = {
+        .callback = [](void* arg) {
+            auto app = static_cast<Application*>(arg);
+            app->Schedule([app]() {
+                app->CloseControlPanel();
+            });
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "control_panel_timer",
+        .skip_unhandled_events = false
+    };
+    
+    esp_err_t err = esp_timer_create(&timer_args, &control_panel_timer_handle_);
+    if (err == ESP_OK) {
+        // Start timer for 5 minutes (300,000,000 microseconds)
+        err = esp_timer_start_once(control_panel_timer_handle_, 300000000ULL);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "⏰ Control panel will auto-close in 5 minutes");
+        } else {
+            ESP_LOGE(TAG, "❌ Failed to start control panel timer");
+        }
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to create control panel timer");
+    }
+}
+
+void Application::CloseControlPanel() {
+    ESP_LOGI(TAG, "🔒 Closing control panel (5 minutes timeout)");
+    
+    // Stop webserver to save power
+    if (webserver_enabled) {
+        ESP_LOGI(TAG, "🌐 Stopping webserver to save power");
+        otto_stop_webserver();
+    }
+    
+    auto disp = Board::GetInstance().GetDisplay();
+    disp->SetEmotion("neutral");
+    disp->SetChatMessage("system", "Bảng điều khiển đã đóng");
+    
+    // Clean up timer
+    if (control_panel_timer_handle_ != nullptr) {
+        esp_timer_stop(control_panel_timer_handle_);
+        esp_timer_delete(control_panel_timer_handle_);
+        control_panel_timer_handle_ = nullptr;
+    }
+    
+    // Return to idle state
+    vTaskDelay(pdMS_TO_TICKS(2000));  // Show message for 2 seconds
+    SetDeviceState(kDeviceStateIdle);
 }

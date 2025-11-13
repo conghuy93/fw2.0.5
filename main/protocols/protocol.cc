@@ -78,6 +78,15 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendUserText(const std::string& text, bool is_chunk, int chunk_index) {
+    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"stt\"";
+    if (is_chunk) {
+        message += ",\"is_chunk\":true,\"chunk_index\":" + std::to_string(chunk_index);
+    }
+    message += ",\"text\":\"" + text + "\"}";
+    SendText(message);
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

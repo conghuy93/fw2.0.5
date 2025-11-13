@@ -26,18 +26,53 @@ public:
     // 重写聊天消息设置方法
     virtual void SetChatMessage(const char* role, const char* content) override;
 
+    // 音乐信息显示方法
+    // TODO: void SetMusicInfo(const char* song_name);
+
     // 重写状态栏更新方法，禁用低电量弹窗显示
     virtual void UpdateStatusBar(bool update_all = false) override;
 
-    // 切换emoji模式方法
+    // 重写图片预览方法（继承父类实现）
+    virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override {
+        SpiLcdDisplay::SetPreviewImage(std::move(image));
+    }
+
+    //切换emoji模式方法
     void SetEmojiMode(bool use_otto_emoji);
     bool IsUsingOttoEmoji() const { return use_otto_emoji_; }
 
+    // UDP Drawing support methods
+    void EnableDrawingCanvas(bool enable);
+    void ClearDrawingCanvas();
+    void DrawPixel(int x, int y, bool state);
+    bool IsDrawingCanvasEnabled() const { return drawing_canvas_enabled_; }
+
+    // Display power management
+    void TurnOn();  // Turn on display and reset auto-off timer
+    void TurnOff(); // Turn off display
+    bool IsOn() const { return display_on_; }
+    void SetAutoOffEnabled(bool enabled); // Enable/disable auto-off after 5 minutes idle
+    bool IsAutoOffEnabled() const { return auto_off_enabled_; }
+
 private:
     void SetupGifContainer();
+    void InitializeDrawingCanvas();
+    void CleanupDrawingCanvas();
 
     lv_obj_t* emotion_gif_;  ///< GIF表情组件
     bool use_otto_emoji_;    ///< 是否使用Otto emoji (true) 还是默认emoji (false)
+
+    // UDP Drawing canvas
+    lv_obj_t* drawing_canvas_;       ///< Drawing canvas object
+    void* drawing_canvas_buf_;       ///< Canvas buffer
+    bool drawing_canvas_enabled_;    ///< Is drawing mode enabled
+
+    // Display power management
+    bool display_on_;                ///< Display power state
+    bool auto_off_enabled_;          ///< Auto-off feature enabled/disabled
+    esp_timer_handle_t auto_off_timer_; ///< Timer for auto-off after 5 min idle
+    static void AutoOffTimerCallback(void* arg);
+    void ResetAutoOffTimer();        ///< Reset the 5-minute idle timer
 
     // 表情映射
     struct EmotionMap {

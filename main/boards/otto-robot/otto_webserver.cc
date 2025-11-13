@@ -7,9 +7,10 @@
 #include <stdio.h>
 #include <nvs_flash.h>
 
-extern "C" {
-
+// TAG used by both C and C++ code
 static const char *TAG = "OttoWeb";
+
+extern "C" {
 
 // Global variables
 bool webserver_enabled = false;
@@ -20,13 +21,25 @@ static int s_retry_num = 0;
 static bool auto_pose_enabled = false;
 static TimerHandle_t auto_pose_timer = NULL;
 static uint32_t auto_pose_interval_ms = 60000;  // Default 60 seconds
-static char selected_poses[200] = "sit,jump,wave,bow,stretch,swing,dance";  // Default all
+static char selected_poses[200] = "sit,wave,bow,stretch,swing,dance";  // Default all (removed jump)
 
 // Auto emoji change variables
 static bool auto_emoji_enabled = false;
 static TimerHandle_t auto_emoji_timer = NULL;
 static uint32_t auto_emoji_interval_ms = 10000;  // Default 10 seconds
 static char selected_emojis[300] = "happy,laughing,winking,cool,love,surprised,excited,sleepy,sad,angry,confused,thinking,neutral,shocked";  // Default all
+
+// Webserver auto-stop timer (30 minutes)
+static TimerHandle_t webserver_auto_stop_timer = NULL;
+static const uint32_t WEBSERVER_AUTO_STOP_DELAY_MS = 30 * 60 * 1000;  // 30 minutes
+
+// Timer callback for webserver auto-stop
+void webserver_auto_stop_callback(TimerHandle_t xTimer) {
+    ESP_LOGI(TAG, "⏱️ Webserver auto-stop timeout (30 min) - stopping webserver");
+    otto_stop_webserver();
+}
+
+// Timer callback for auto pose change
 
 // Timer callback for auto pose change
 void auto_pose_timer_callback(TimerHandle_t xTimer) {
@@ -45,7 +58,6 @@ void auto_pose_timer_callback(TimerHandle_t xTimer) {
     // All available poses
     const PoseAction all_poses[] = {
         {"sit", ACTION_DOG_SIT_DOWN, 1, 500},
-        {"jump", ACTION_DOG_JUMP, 1, 200},
         {"wave", ACTION_DOG_WAVE_RIGHT_FOOT, 3, 50},
         {"bow", ACTION_DOG_BOW, 1, 1500},
         {"stretch", ACTION_DOG_STRETCH, 2, 15},
@@ -55,7 +67,7 @@ void auto_pose_timer_callback(TimerHandle_t xTimer) {
     const int total_poses = sizeof(all_poses) / sizeof(all_poses[0]);
     
     // Build list of enabled poses
-    PoseAction enabled_poses[7];
+    PoseAction enabled_poses[6];  // Reduced from 7 to 6 (removed jump)
     int enabled_count = 0;
     
     for (int i = 0; i < total_poses; i++) {
@@ -83,47 +95,60 @@ void auto_pose_timer_callback(TimerHandle_t xTimer) {
     pose_index = (pose_index + 1) % enabled_count;
 }
 
-// Timer callback for auto emoji change - OPTIMIZED to reduce stack usage
+// Timer callback for auto emoji change - IMPROVED: Now selects random emoji from enabled list
 void auto_emoji_timer_callback(TimerHandle_t xTimer) {
     if (!auto_emoji_enabled) {
         return;
     }
-    
+
     // Static list to avoid stack allocation
     static const char* all_emojis[] = {
-        "happy", "laughing", "winking", "cool", "love", 
-        "surprised", "excited", "sleepy", "sad", "angry", 
+        "happy", "laughing", "winking", "cool", "love",
+        "surprised", "excited", "sleepy", "sad", "angry",
         "confused", "thinking", "neutral", "shocked"
     };
     static const int total_emojis = 14;
-    static int emoji_index = 0;
-    
-    // Find next enabled emoji (simple iteration, no array building)
-    int checked = 0;
-    const char* current_emoji = nullptr;
-    
-    while (checked < total_emojis && current_emoji == nullptr) {
-        if (emoji_index >= total_emojis) emoji_index = 0;
-        
-        if (strstr(selected_emojis, all_emojis[emoji_index]) != nullptr) {
-            current_emoji = all_emojis[emoji_index];
+
+    // Count enabled emojis and find random one
+    int enabled_count = 0;
+    const char* selected_emoji = nullptr;
+
+    // First pass: count enabled emojis
+    for (int i = 0; i < total_emojis; i++) {
+        if (strstr(selected_emojis, all_emojis[i]) != nullptr) {
+            enabled_count++;
         }
-        
-        emoji_index++;
-        checked++;
     }
-    
-    if (current_emoji == nullptr) {
+
+    if (enabled_count == 0) {
         ESP_LOGW(TAG, "⚠️ No emojis selected for auto mode");
-        emoji_index = 0;
         return;
     }
-    
-    // Set emoji on display - keep it simple
+
+    // Second pass: select random enabled emoji
+    int target_index = esp_random() % enabled_count;
+    int current_index = 0;
+
+    for (int i = 0; i < total_emojis; i++) {
+        if (strstr(selected_emojis, all_emojis[i]) != nullptr) {
+            if (current_index == target_index) {
+                selected_emoji = all_emojis[i];
+                break;
+            }
+            current_index++;
+        }
+    }
+
+    if (selected_emoji == nullptr) {
+        ESP_LOGW(TAG, "⚠️ Failed to select random emoji");
+        return;
+    }
+
+    // Turn on display and set emoji (SetEmotion will also turn on display)
     auto display = Board::GetInstance().GetDisplay();
     if (display) {
-        display->SetEmotion(current_emoji);
-        ESP_LOGI(TAG, "😊 Auto emoji: %s", current_emoji);
+        display->SetEmotion(selected_emoji);
+        ESP_LOGI(TAG, "😊 Auto emoji: %s (random from %d enabled)", selected_emoji, enabled_count);
     }
 }
 
@@ -283,6 +308,7 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, ".control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin-bottom: 15px; } @media (min-width: 768px) { .control-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; } }");
     httpd_resp_sendstr_chunk(req, ".btn { background: #ffffff; border: 2px solid #000000; color: #000000; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.15s; box-shadow: 0 2px 5px rgba(0,0,0,0.15); touch-action: manipulation; user-select: none; } @media (min-width: 768px) { .btn { padding: 14px 18px; font-size: 15px; } }");
     httpd_resp_sendstr_chunk(req, ".btn:active { transform: scale(0.95); box-shadow: 0 1px 3px rgba(0,0,0,0.2); background: #f0f0f0; }");
+    httpd_resp_sendstr_chunk(req, ".paw-btn { font-size: 18px; }");
     
     // Compact sections for mobile
     httpd_resp_sendstr_chunk(req, ".movement-section { margin-bottom: 15px; }");
@@ -359,11 +385,11 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
     httpd_resp_sendstr_chunk(req, "<div class='section-title'>🎮 Điều Khiển Di Chuyển</div>");
     httpd_resp_sendstr_chunk(req, "<div class='direction-pad'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn btn-forward' onclick='sendAction(\"dog_walk\", 3, 150)'>⬆️ Tiến</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn btn-left' onclick='sendAction(\"dog_turn_left\", 2, 150)'>⬅️ Trái</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn btn-forward paw-btn' onclick='sendAction(\"dog_walk\", 3, 150)'>🐾 Tiến</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn btn-left paw-btn' onclick='sendAction(\"dog_turn_left\", 2, 150)'>🐾 Trái</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn btn-stop' onclick='sendAction(\"dog_stop\", 0, 0)'>🛑 DỪNG</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn btn-right' onclick='sendAction(\"dog_turn_right\", 2, 150)'>➡️ Phải</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn btn-backward' onclick='sendAction(\"dog_walk_back\", 3, 150)'>⬇️ Lùi</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn btn-right paw-btn' onclick='sendAction(\"dog_turn_right\", 2, 150)'>🐾 Phải</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn btn-backward paw-btn' onclick='sendAction(\"dog_walk_back\", 3, 150)'>🐾 Lùi</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     
     // Auto Pose Toggle Section
@@ -382,8 +408,8 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_sit_down\", 1, 500)'>🪑 Ngồi</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_lie_down\", 1, 1000)'>🛏️ Nằm</button>");
     // New Defend and Scratch buttons  
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_defend\", 1, 500)'>🛡️ Phòng Thủ</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_scratch\", 5, 50)'>🐾 Gãi Ngứa</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_defend\", 1, 500)'>� Giả Chết</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn paw-btn' onclick='sendAction(\"dog_scratch\", 5, 50)'>🐾 Gãi Ngứa</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_wave_right_foot\", 5, 50)'>👋 Vẫy Tay</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_wag_tail\", 5, 100)'>🐕 Vẫy Đuôi</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_swing\", 5, 10)'>🎯 Lắc Lư</button>");
@@ -393,13 +419,25 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_greet\", 1, 500)'>👋 Chào Hỏi</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_attack\", 1, 500)'>⚔️ Tấn Công</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_celebrate\", 1, 500)'>🎉 Ăn Mừng</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_retreat\", 1, 500)'>🏃 Rút Lui</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_search\", 1, 500)'>🔍 Tìm Kiếm</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
     
-    // New Special Actions section
+    // New Poses Section (reduced - removed tools with >32 limit)
     httpd_resp_sendstr_chunk(req, "<div class='fun-actions'>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🎭 Tư Thế Mới</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='action-grid'>");
+    // Comment out removed tools: shake_paw, sidestep (đã xóa để giảm xuống <32 tools)
+    // httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_shake_paw\", 3, 150)'>🤝 Bắt Tay</button>");
+    // httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_sidestep_right\", 3, 80)'>➡️ Đi Ngang Phải</button>");
+    // httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_sidestep_left\", 3, 80)'>⬅️ Đi Ngang Trái</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_pushup\", 3, 150)'>💪 Chống Đẩy</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_balance\", 2000, 150)'>🚽 Đi Vệ Sinh</button>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    
+    // New Special Actions section (HIDDEN)
+    httpd_resp_sendstr_chunk(req, "<div class='fun-actions' style='display:none;'>");
     httpd_resp_sendstr_chunk(req, "<div class='section-title'>🎪 Hành Động Đặc Biệt</div>");
     httpd_resp_sendstr_chunk(req, "<div class='action-grid'>");
     httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendAction(\"dog_roll_over\", 1, 200)'>🔄 Lăn Qua Lăn Lại</button>");
@@ -438,9 +476,22 @@ void send_otto_control_page(httpd_req_t *req) {
     // Page 2: Settings & Configuration
     httpd_resp_sendstr_chunk(req, "<div class='page' id='page2'>");
 
+    // AI Chat Section - MOVED TO TOP OF PAGE 2
+    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>💬 Chat với AI</div>");
+    httpd_resp_sendstr_chunk(req, "<div style='background: linear-gradient(145deg, #f0f4ff, #ffffff); border: 2px solid #1976d2; border-radius: 15px; padding: 20px; margin-bottom: 20px;'>");
+    httpd_resp_sendstr_chunk(req, "<div style='margin-bottom: 15px; color: #666; font-size: 14px;'>");
+    httpd_resp_sendstr_chunk(req, "💬 Nhập văn bản để Otto nói chuyện với AI qua WebSocket!");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "<textarea id='aiTextInput' placeholder='Nhập nội dung muốn gửi cho AI...' style='width: 100%; min-height: 100px; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; resize: vertical;'></textarea>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='sendTextToAI()' style='margin-top: 10px; background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border-color: #2e7d32; font-weight: bold; padding: 12px 20px; width: 100%;'>📤 Gửi cho AI</button>");
+    httpd_resp_sendstr_chunk(req, "<div id='aiChatStatus' style='margin-top: 10px; font-size: 14px; color: #666;'></div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+
     // Volume Control Section
     httpd_resp_sendstr_chunk(req, "<div class='volume-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>� Điều Chỉnh Âm Lượng</div>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🔊 Điều Chỉnh Âm Lượng</div>");
     httpd_resp_sendstr_chunk(req, "<div style='background: linear-gradient(145deg, #f8f8f8, #ffffff); border: 2px solid #000000; border-radius: 15px; padding: 20px; margin-bottom: 20px;'>");
     httpd_resp_sendstr_chunk(req, "<div style='display: flex; align-items: center; gap: 15px; flex-wrap: wrap;'>");
     httpd_resp_sendstr_chunk(req, "<span style='font-weight: bold; color: #000; min-width: 80px;'>🔈 Âm lượng:</span>");
@@ -547,6 +598,22 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
     httpd_resp_sendstr_chunk(req, "<strong>🤖 OTTO GIF:</strong> Hiển thị emoji động GIF (Otto robot)<br>");
     httpd_resp_sendstr_chunk(req, "<strong>😊 Twemoji:</strong> Hiển thị emoji văn bản chuẩn Unicode");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+
+    // Gemini API Key Configuration Section (HIDDEN)
+    httpd_resp_sendstr_chunk(req, "<div class='movement-section' style='display:none;'>");
+    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🤖 Cấu Hình Gemini AI</div>");
+    httpd_resp_sendstr_chunk(req, "<div style='background: linear-gradient(145deg, #f8f8f8, #ffffff); border: 2px solid #000000; border-radius: 15px; padding: 20px; margin-bottom: 20px;'>");
+    httpd_resp_sendstr_chunk(req, "<div style='margin-bottom: 15px; color: #666; font-size: 14px;'>");
+    httpd_resp_sendstr_chunk(req, "⭐ Nhập Google Gemini API Key để Otto trở nên thông minh hơn!<br>");
+    httpd_resp_sendstr_chunk(req, "🔑 Lấy key miễn phí tại: <a href='https://aistudio.google.com/apikey' target='_blank' style='color: #1976d2;'>Google AI Studio</a>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "<div style='display: flex; gap: 10px; flex-wrap: wrap; align-items: center;'>");
+    httpd_resp_sendstr_chunk(req, "<input type='text' id='geminiApiKey' placeholder='Nhập Gemini API Key...' style='flex: 1; min-width: 250px; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 14px;'>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn' onclick='saveGeminiKey()' style='background: linear-gradient(145deg, #4285f4, #5a95f5); color: white; border-color: #1976d2; font-weight: bold; padding: 12px 20px;'>💾 Lưu Key</button>");
+    httpd_resp_sendstr_chunk(req, "</div>");
+    httpd_resp_sendstr_chunk(req, "<div id='geminiKeyStatus' style='margin-top: 10px; font-size: 14px;'></div>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
 
@@ -679,7 +746,7 @@ void send_otto_control_page(httpd_req_t *req) {
     
     // Auto pose toggle JavaScript with pose selection
     httpd_resp_sendstr_chunk(req, "var autoPoseEnabled = false;");
-    httpd_resp_sendstr_chunk(req, "var selectedPoses = ['sit','jump','wave','bow','stretch','swing','dance'];"); // Default all enabled
+    httpd_resp_sendstr_chunk(req, "var selectedPoses = ['sit','jump'  ,'wave','bow','stretch','swing','dance'];"); // Default all enabled
     httpd_resp_sendstr_chunk(req, "function toggleAutoPose() {");
     httpd_resp_sendstr_chunk(req, "  autoPoseEnabled = !autoPoseEnabled;");
     httpd_resp_sendstr_chunk(req, "  var btn = document.getElementById('autoPoseBtn');");
@@ -754,8 +821,92 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "  });");
     httpd_resp_sendstr_chunk(req, "}");
     
+    // Gemini API Key functions
+    httpd_resp_sendstr_chunk(req, "function saveGeminiKey() {");
+    httpd_resp_sendstr_chunk(req, "  var apiKey = document.getElementById('geminiApiKey').value;");
+    httpd_resp_sendstr_chunk(req, "  if (!apiKey || apiKey.trim() === '') {");
+    httpd_resp_sendstr_chunk(req, "    document.getElementById('geminiKeyStatus').innerHTML = '❌ Vui lòng nhập API key!';");
+    httpd_resp_sendstr_chunk(req, "    document.getElementById('geminiKeyStatus').style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "    return;");
+    httpd_resp_sendstr_chunk(req, "  }");
+    httpd_resp_sendstr_chunk(req, "  document.getElementById('geminiKeyStatus').innerHTML = '⏳ Đang lưu...';");
+    httpd_resp_sendstr_chunk(req, "  document.getElementById('geminiKeyStatus').style.color = '#666';");
+    httpd_resp_sendstr_chunk(req, "  fetch('/gemini_api_key', {");
+    httpd_resp_sendstr_chunk(req, "    method: 'POST',");
+    httpd_resp_sendstr_chunk(req, "    headers: {'Content-Type': 'application/json'},");
+    httpd_resp_sendstr_chunk(req, "    body: JSON.stringify({api_key: apiKey})");
+    httpd_resp_sendstr_chunk(req, "  }).then(r => r.json()).then(data => {");
+    httpd_resp_sendstr_chunk(req, "    if (data.success) {");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').innerHTML = '✅ API key đã được lưu thành công!';");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').style.color = '#4caf50';");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiApiKey').value = '';");
+    httpd_resp_sendstr_chunk(req, "      loadGeminiKeyStatus();");
+    httpd_resp_sendstr_chunk(req, "    } else {");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').innerHTML = '❌ Lỗi: ' + data.error;");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "    }");
+    httpd_resp_sendstr_chunk(req, "  }).catch(e => {");
+    httpd_resp_sendstr_chunk(req, "    document.getElementById('geminiKeyStatus').innerHTML = '❌ Lỗi kết nối: ' + e;");
+    httpd_resp_sendstr_chunk(req, "    document.getElementById('geminiKeyStatus').style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "  });");
+    httpd_resp_sendstr_chunk(req, "}");
+    httpd_resp_sendstr_chunk(req, "function loadGeminiKeyStatus() {");
+    httpd_resp_sendstr_chunk(req, "  fetch('/gemini_api_key').then(r => r.json()).then(data => {");
+    httpd_resp_sendstr_chunk(req, "    if (data.configured) {");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').innerHTML = '✅ API key đã cấu hình: ' + data.key_preview;");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').style.color = '#4caf50';");
+    httpd_resp_sendstr_chunk(req, "    } else {");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').innerHTML = '⚠️ Chưa có API key. Nhập key để kích hoạt Gemini AI.';");
+    httpd_resp_sendstr_chunk(req, "      document.getElementById('geminiKeyStatus').style.color = '#ff9800';");
+    httpd_resp_sendstr_chunk(req, "    }");
+    httpd_resp_sendstr_chunk(req, "  });");
+    httpd_resp_sendstr_chunk(req, "}");
+    
+    // AI text chat function
+    httpd_resp_sendstr_chunk(req, "function sendTextToAI() {");
+    httpd_resp_sendstr_chunk(req, "  const textInput = document.getElementById('aiTextInput');");
+    httpd_resp_sendstr_chunk(req, "  const statusDiv = document.getElementById('aiChatStatus');");
+    httpd_resp_sendstr_chunk(req, "  const text = textInput.value.trim();");
+    httpd_resp_sendstr_chunk(req, "  if (!text) {");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.innerHTML = '❌ Vui lòng nhập nội dung!';");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "    return;");
+    httpd_resp_sendstr_chunk(req, "  }");
+    httpd_resp_sendstr_chunk(req, "  if (text.length > 1500) {");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.innerHTML = '❌ Văn bản quá dài! Tối đa 1500 ký tự.';");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "    return;");
+    httpd_resp_sendstr_chunk(req, "  }");
+    httpd_resp_sendstr_chunk(req, "  statusDiv.innerHTML = '⏳ Đang gửi...';");
+    httpd_resp_sendstr_chunk(req, "  statusDiv.style.color = '#666';");
+    httpd_resp_sendstr_chunk(req, "  fetch('/api/ai/send', {");
+    httpd_resp_sendstr_chunk(req, "    method: 'POST',");
+    httpd_resp_sendstr_chunk(req, "    headers: {'Content-Type': 'application/json'},");
+    httpd_resp_sendstr_chunk(req, "    body: JSON.stringify({text: text})");
+    httpd_resp_sendstr_chunk(req, "  }).then(r => r.json()).then(data => {");
+    httpd_resp_sendstr_chunk(req, "    if (data.success) {");
+    httpd_resp_sendstr_chunk(req, "      statusDiv.innerHTML = '✅ Đã gửi thành công! Otto đang xử lý...';");
+    httpd_resp_sendstr_chunk(req, "      statusDiv.style.color = '#4caf50';");
+    httpd_resp_sendstr_chunk(req, "      textInput.value = '';");
+    httpd_resp_sendstr_chunk(req, "    } else {");
+    httpd_resp_sendstr_chunk(req, "      statusDiv.innerHTML = '❌ Lỗi: ' + data.message;");
+    httpd_resp_sendstr_chunk(req, "      statusDiv.style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "    }");
+    httpd_resp_sendstr_chunk(req, "  }).catch(e => {");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.innerHTML = '❌ Lỗi kết nối: ' + e;");
+    httpd_resp_sendstr_chunk(req, "    statusDiv.style.color = '#f44336';");
+    httpd_resp_sendstr_chunk(req, "  });");
+    httpd_resp_sendstr_chunk(req, "}");
+    httpd_resp_sendstr_chunk(req, "document.getElementById('aiTextInput').addEventListener('keypress', function(e) {");
+    httpd_resp_sendstr_chunk(req, "  if (e.key === 'Enter' && !e.shiftKey) {");
+    httpd_resp_sendstr_chunk(req, "    e.preventDefault();");
+    httpd_resp_sendstr_chunk(req, "    sendTextToAI();");
+    httpd_resp_sendstr_chunk(req, "  }");
+    httpd_resp_sendstr_chunk(req, "});");
+    
     // Initialize volume slider
     httpd_resp_sendstr_chunk(req, "window.onload = function() {");
+    httpd_resp_sendstr_chunk(req, "  loadGeminiKeyStatus();");
     httpd_resp_sendstr_chunk(req, "  var slider = document.getElementById('volumeSlider');");
     httpd_resp_sendstr_chunk(req, "  var output = document.getElementById('volumeValue');");
     httpd_resp_sendstr_chunk(req, "  slider.oninput = function() {");
@@ -887,15 +1038,6 @@ void otto_execute_web_action(const char* action, int param1, int param2) {
         otto_controller_queue_action(ACTION_DOG_SWING, 3, 10, 0, 0);  // Changed from 150 to 10 for faster swing
         ret = ESP_OK;
         ESP_LOGI(TAG, "🎉 Celebrate sequence queued: dance → wave → swing");
-    } else if (strstr(action, "retreat")) {
-        // Scared emoji when retreating
-        if (auto display = Board::GetInstance().GetDisplay()) display->SetEmotion("scared");
-        // Retreat sequence: back → turn → run back
-        otto_controller_queue_action(ACTION_DOG_WALK_BACK, 3, 100, 0, 0);
-        otto_controller_queue_action(ACTION_DOG_TURN_LEFT, 2, 150, 0, 0);
-        otto_controller_queue_action(ACTION_DOG_WALK_BACK, 2, 80, 0, 0);
-        ret = ESP_OK;
-        ESP_LOGI(TAG, "🏃 Retreat sequence queued: back → turn → run");
     } else if (strstr(action, "search")) {
         // Scared emoji when searching (cautious)
         if (auto display = Board::GetInstance().GetDisplay()) display->SetEmotion("scared");
@@ -916,6 +1058,24 @@ void otto_execute_web_action(const char* action, int param1, int param2) {
         if (auto display = Board::GetInstance().GetDisplay()) display->SetEmotion("shocked");
         ret = otto_controller_queue_action(ACTION_DOG_PLAY_DEAD, 1, param1 > 0 ? param1 : 5, 0, 0);
         ESP_LOGI(TAG, "💀 Playing dead for %d seconds", param1 > 0 ? param1 : 5);
+    } else if (strstr(action, "shake_paw")) {
+        ret = otto_controller_queue_action(ACTION_DOG_SHAKE_PAW, param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 150, 0, 0);
+        ESP_LOGI(TAG, "🤝 Shaking paw: %d shakes, speed %d", param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 150);
+    // Removed sidestep actions (tools deleted to stay under 32 limit)
+    /*
+    } else if (strstr(action, "sidestep_right")) {
+        ret = otto_controller_queue_action(ACTION_DOG_SIDESTEP, param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 80, 1, 0);  // direction = 1 (right)
+        ESP_LOGI(TAG, "➡️ Sidestepping right: %d steps, speed %d", param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 80);
+    } else if (strstr(action, "sidestep_left")) {
+        ret = otto_controller_queue_action(ACTION_DOG_SIDESTEP, param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 80, -1, 0);  // direction = -1 (left)
+        ESP_LOGI(TAG, "⬅️ Sidestepping left: %d steps, speed %d", param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 80);
+    */
+    } else if (strstr(action, "pushup")) {
+        ret = otto_controller_queue_action(ACTION_DOG_PUSHUP, param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 150, 0, 0);
+        ESP_LOGI(TAG, "💪 Doing pushups: %d pushups, speed %d", param1 > 0 ? param1 : 3, param2 > 0 ? param2 : 150);
+    } else if (strstr(action, "balance")) {
+        ret = otto_controller_queue_action(ACTION_DOG_BALANCE, param1 > 0 ? param1 : 2000, param2 > 0 ? param2 : 150, 0, 0);
+        ESP_LOGI(TAG, "⚖️ Balancing: %d ms duration, speed %d", param1 > 0 ? param1 : 2000, param2 > 0 ? param2 : 150);
     } else if (strstr(action, "stop")) {
         // Stop action - clear queue and go to home position
         ret = otto_controller_stop_all();  // This will clear all queued actions
@@ -1368,13 +1528,38 @@ esp_err_t otto_auto_emoji_interval_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Screen toggle handler
+// Screen toggle handler - now with auto-off control
 esp_err_t otto_screen_toggle_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "📱 SCREEN TOGGLE HANDLER CALLED!");
 
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-    // Get display instance and toggle power save mode
+    // Parse query parameters
+    char query[256] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char param_value[32] = {0};
+        
+        // Check for auto_off parameter
+        if (httpd_query_key_value(query, "auto_off", param_value, sizeof(param_value)) == ESP_OK) {
+            auto display = Board::GetInstance().GetDisplay();
+            if (display) {
+                // Cast to OttoEmojiDisplay to access auto-off methods
+                OttoEmojiDisplay* otto_display = dynamic_cast<OttoEmojiDisplay*>(display);
+                if (otto_display) {
+                    bool enable = (strcmp(param_value, "true") == 0);
+                    otto_display->SetAutoOffEnabled(enable);
+                    
+                    httpd_resp_set_type(req, "text/plain");
+                    char response[100];
+                    snprintf(response, sizeof(response), "✅ Auto-off (5 min): %s", enable ? "BẬT" : "TẮT");
+                    httpd_resp_sendstr(req, response);
+                    return ESP_OK;
+                }
+            }
+        }
+    }
+
+    // Get display instance and toggle power save mode (legacy behavior)
     auto display = Board::GetInstance().GetDisplay();
     if (display) {
         // Use power save mode to simulate screen toggle
@@ -1393,6 +1578,70 @@ esp_err_t otto_screen_toggle_handler(httpd_req_t *req) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_sendstr(req, "❌ Display system not available");
     }
+
+    return ESP_OK;
+}
+
+// Send text to AI handler - Web UI chat feature
+esp_err_t otto_send_text_to_ai_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "💬 SEND TEXT TO AI HANDLER CALLED!");
+
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_type(req, "application/json");
+
+    // Read POST data
+    char content[2048] = {0};
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        const char* error_resp = "{\"success\":false,\"message\":\"Failed to receive data\"}";
+        httpd_resp_sendstr(req, error_resp);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "📥 Received POST data: %s", content);
+
+    // Parse JSON
+    cJSON *root = cJSON_Parse(content);
+    if (root == NULL) {
+        ESP_LOGW(TAG, "❌ Failed to parse JSON");
+        const char* error_resp = "{\"success\":false,\"message\":\"Invalid JSON format\"}";
+        httpd_resp_sendstr(req, error_resp);
+        return ESP_FAIL;
+    }
+
+    // Extract text field
+    cJSON *text_item = cJSON_GetObjectItem(root, "text");
+    if (!cJSON_IsString(text_item) || text_item->valuestring == NULL) {
+        ESP_LOGW(TAG, "❌ Missing or invalid 'text' field");
+        const char* error_resp = "{\"success\":false,\"message\":\"Missing 'text' field\"}";
+        httpd_resp_sendstr(req, error_resp);
+        cJSON_Delete(root);
+        return ESP_FAIL;
+    }
+
+    std::string text = text_item->valuestring;
+    cJSON_Delete(root);
+
+    if (text.empty()) {
+        ESP_LOGW(TAG, "❌ Empty text");
+        const char* error_resp = "{\"success\":false,\"message\":\"Text cannot be empty\"}";
+        httpd_resp_sendstr(req, error_resp);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "✅ Text to send: %s", text.c_str());
+
+    // Schedule SendSttMessage on main task
+    Application::GetInstance().Schedule([text]() {
+        Application::GetInstance().SendSttMessage(text);
+    });
+
+    // Send success response
+    const char* success_resp = "{\"success\":true,\"message\":\"Text sent to AI successfully\"}";
+    httpd_resp_sendstr(req, success_resp);
 
     return ESP_OK;
 }
@@ -1488,6 +1737,102 @@ esp_err_t otto_forget_wifi_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Gemini API Key handler - Save API key to NVS
+esp_err_t otto_gemini_api_key_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    // Read POST body (API key)
+    char buf[200];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"error\":\"Invalid request body\"}");
+        return ESP_OK;
+    }
+    buf[ret] = '\0';
+    
+    // Parse JSON: {"api_key": "AIza..."}
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"error\":\"Invalid JSON\"}");
+        return ESP_OK;
+    }
+    
+    cJSON *api_key_json = cJSON_GetObjectItem(root, "api_key");
+    if (!cJSON_IsString(api_key_json)) {
+        cJSON_Delete(root);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"error\":\"Missing api_key field\"}");
+        return ESP_OK;
+    }
+    
+    const char* api_key = api_key_json->valuestring;
+    ESP_LOGI(TAG, "🔑 Saving Gemini API key: %s...", api_key[0] ? "AIza***" : "(empty)");
+    
+    // Save to NVS
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        err = nvs_set_str(nvs_handle, "gemini_key", api_key);
+        if (err == ESP_OK) {
+            nvs_commit(nvs_handle);
+            ESP_LOGI(TAG, "✅ Gemini API key saved to NVS");
+            
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"API key saved successfully\"}");
+        } else {
+            ESP_LOGE(TAG, "❌ Failed to save API key: %d", err);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_sendstr(req, "{\"error\":\"Failed to save API key\"}");
+        }
+        nvs_close(nvs_handle);
+    } else {
+        ESP_LOGE(TAG, "❌ Failed to open NVS: %d", err);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, "{\"error\":\"Failed to open storage\"}");
+    }
+    
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+// Get Gemini API Key handler - Check if key is configured
+esp_err_t otto_gemini_get_key_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_type(req, "application/json");
+    
+    // Read API key from NVS (masked)
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
+    if (err == ESP_OK) {
+        char api_key[200];
+        size_t required_size = sizeof(api_key);
+        err = nvs_get_str(nvs_handle, "gemini_key", api_key, &required_size);
+        nvs_close(nvs_handle);
+        
+        if (err == ESP_OK && strlen(api_key) > 0) {
+            // Mask the key (show first 8 chars only)
+            char masked[210];
+            if (strlen(api_key) > 8) {
+                snprintf(masked, sizeof(masked), "%.8s***", api_key);
+            } else {
+                snprintf(masked, sizeof(masked), "%s", api_key);
+            }
+            
+            char response[256];
+            snprintf(response, sizeof(response), 
+                    "{\"configured\":true,\"key_preview\":\"%s\"}", masked);
+            httpd_resp_sendstr(req, response);
+            return ESP_OK;
+        }
+    }
+    
+    // No key configured
+    httpd_resp_sendstr(req, "{\"configured\":false}");
+    return ESP_OK;
+}
+
 // Start HTTP server
 esp_err_t otto_start_webserver(void) {
     if (server != NULL) {
@@ -1497,7 +1842,7 @@ esp_err_t otto_start_webserver(void) {
     
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 17;  // Increased for screen_toggle, wake_up, wake_mic, forget_wifi and change_wifi handlers
+    config.max_uri_handlers = 19;  // Reduced after removing UDP Drawing handlers
     config.max_resp_headers = 8;
     config.stack_size = 8192;
     
@@ -1626,13 +1971,101 @@ esp_err_t otto_start_webserver(void) {
         };
         httpd_register_uri_handler(server, &wake_mic_uri);
         
-        ESP_LOGI(TAG, "HTTP server started successfully");
+        // Gemini API Key handler
+        httpd_uri_t gemini_api_key_uri = {
+            .uri = "/gemini_api_key",
+            .method = HTTP_POST,
+            .handler = otto_gemini_api_key_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &gemini_api_key_uri);
+        
+        // Get Gemini API Key handler
+        httpd_uri_t gemini_get_key_uri = {
+            .uri = "/gemini_api_key",
+            .method = HTTP_GET,
+            .handler = otto_gemini_get_key_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &gemini_get_key_uri);
+        
+        // Send text to AI handler (Web UI chat feature)
+        httpd_uri_t send_text_to_ai_uri = {
+            .uri = "/api/ai/send",
+            .method = HTTP_POST,
+            .handler = otto_send_text_to_ai_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &send_text_to_ai_uri);
+        
+        ESP_LOGI(TAG, "HTTP server started successfully (with UDP Drawing + Gemini API support)");
         webserver_enabled = true;
+        
+        // Create and start auto-stop timer (30 minutes)
+        if (webserver_auto_stop_timer == NULL) {
+            webserver_auto_stop_timer = xTimerCreate(
+                "WebServerAutoStop",
+                pdMS_TO_TICKS(WEBSERVER_AUTO_STOP_DELAY_MS),
+                pdFALSE,  // One-shot timer
+                NULL,
+                webserver_auto_stop_callback
+            );
+        }
+        
+        if (webserver_auto_stop_timer != NULL) {
+            xTimerStart(webserver_auto_stop_timer, 0);
+            ESP_LOGI(TAG, "⏱️ Webserver will auto-stop in 30 minutes");
+        }
+        
         return ESP_OK;
     }
     
     ESP_LOGE(TAG, "Failed to start HTTP server");
     return ESP_FAIL;
+}
+
+// Stop HTTP server
+esp_err_t otto_stop_webserver(void) {
+    if (server == NULL) {
+        ESP_LOGW(TAG, "Server not running");
+        return ESP_OK;
+    }
+    
+    ESP_LOGI(TAG, "Stopping HTTP server...");
+    
+    // Stop auto-stop timer
+    if (webserver_auto_stop_timer != NULL) {
+        xTimerStop(webserver_auto_stop_timer, 0);
+        ESP_LOGI(TAG, "⏱️ Webserver auto-stop timer stopped");
+    }
+    
+    // Stop the server
+    esp_err_t err = httpd_stop(server);
+    if (err == ESP_OK) {
+        server = NULL;
+        webserver_enabled = false;
+        ESP_LOGI(TAG, "HTTP server stopped successfully");
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Failed to stop HTTP server: %s", esp_err_to_name(err));
+        return err;
+    }
+}
+
+// UDP Drawing Service integration
+static UdpDrawService* g_udp_draw_service = nullptr;
+static DrawingDisplay* g_drawing_display = nullptr;
+
+// Set UDP Drawing Service pointer (called from otto_robot.cc)
+void otto_set_udp_draw_service(UdpDrawService* service) {
+    g_udp_draw_service = service;
+    ESP_LOGI(TAG, "UDP Drawing Service pointer set for web UI");
+}
+
+// Set Drawing Display pointer (called from otto_robot.cc)
+void otto_set_drawing_display(DrawingDisplay* display) {
+    g_drawing_display = display;
+    ESP_LOGI(TAG, "Drawing Display pointer set for web UI");
 }
 
 

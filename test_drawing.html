@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Otto UDP Drawing Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        input {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .btn-enable { background: #4CAF50; color: white; }
+        .btn-disable { background: #f44336; color: white; }
+        .btn-clear { background: #ff9800; color: white; }
+        .btn-test { background: #2196F3; color: white; }
+        .btn-status { background: #9C27B0; color: white; }
+        button:hover { opacity: 0.8; }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .log {
+            height: 200px;
+            overflow-y: auto;
+            background: #263238;
+            color: #aed581;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: #4CAF50; }
+        .error { color: #f44336; }
+        .info { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Otto UDP Drawing Test</h1>
+        
+        <div class="section">
+            <h3>⚙️ Configuration</h3>
+            <label>
+                Otto IP: 
+                <input type="text" id="ip" value="192.168.0.45" placeholder="192.168.0.x">
+            </label>
+            <br>
+            <label>
+                UDP Port: 
+                <input type="number" id="port" value="12345">
+            </label>
+        </div>
+
+        <div class="section">
+            <h3>🎮 Drawing Mode Control</h3>
+            <button class="btn-enable" onclick="enableDrawing()">✅ Enable Drawing</button>
+            <button class="btn-disable" onclick="disableDrawing()">❌ Disable Drawing</button>
+            <button class="btn-clear" onclick="clearCanvas()">🧹 Clear Canvas</button>
+            <button class="btn-status" onclick="getStatus()">📊 Get Status</button>
+        </div>
+
+        <div class="section">
+            <h3>🧪 Test Patterns</h3>
+            <button class="btn-test" onclick="testHorizontalLine()">─ Horizontal Line</button>
+            <button class="btn-test" onclick="testVerticalLine()">│ Vertical Line</button>
+            <button class="btn-test" onclick="testBox()">□ Box</button>
+            <button class="btn-test" onclick="testDots()">∴ Random Dots</button>
+            <button class="btn-test" onclick="testCross()">✛ Cross</button>
+        </div>
+
+        <div class="section">
+            <h3>✏️ Manual Drawing</h3>
+            <label>X: <input type="number" id="drawX" value="120" min="0" max="239"></label>
+            <label>Y: <input type="number" id="drawY" value="140" min="0" max="279"></label>
+            <br>
+            <button class="btn-test" onclick="drawPixel()">⬜ Draw White</button>
+            <button class="btn-test" onclick="erasePixel()">⬛ Erase (Transparent)</button>
+        </div>
+
+        <div class="section">
+            <h3>📊 Status</h3>
+            <div id="status" class="status">Ready to test...</div>
+        </div>
+
+        <div class="section">
+            <h3>📜 Log</h3>
+            <div id="log" class="log">Waiting for commands...\n</div>
+        </div>
+    </div>
+
+    <script>
+        function getIP() {
+            return document.getElementById('ip').value;
+        }
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const className = type;
+            logDiv.innerHTML += `<span class="${className}">[${time}] ${message}</span>\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        async function apiCall(endpoint, method = 'GET') {
+            const ip = getIP();
+            const url = `http://${ip}${endpoint}`;
+            log(`${method} ${url}`, 'info');
+            
+            try {
+                const response = await fetch(url, { method });
+                const text = await response.text();
+                log(`✅ Response: ${text}`, 'success');
+                updateStatus(text);
+                return text;
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+                updateStatus(`Error: ${error.message}`);
+                return null;
+            }
+        }
+
+        async function enableDrawing() {
+            log('Enabling drawing mode...', 'info');
+            await apiCall('/drawing_mode?enable=1');
+        }
+
+        async function disableDrawing() {
+            log('Disabling drawing mode...', 'info');
+            await apiCall('/drawing_mode?enable=0');
+        }
+
+        async function clearCanvas() {
+            log('Clearing canvas...', 'info');
+            await apiCall('/drawing_clear');
+        }
+
+        async function getStatus() {
+            log('Getting status...', 'info');
+            const status = await apiCall('/drawing_status');
+            if (status) {
+                try {
+                    const json = JSON.parse(status);
+                    updateStatus(`Drawing: ${json.enabled ? 'ON' : 'OFF'} | Packets: ${json.packets_received} | Pixels: ${json.pixels_drawn} | Errors: ${json.errors}`);
+                } catch (e) {
+                    updateStatus(status);
+                }
+            }
+        }
+
+        async function drawPixel() {
+            const x = document.getElementById('drawX').value;
+            const y = document.getElementById('drawY').value;
+            log(`Drawing pixel at (${x}, ${y})`, 'info');
+            await apiCall(`/drawing_pixel?x=${x}&y=${y}&state=1`);
+        }
+
+        async function erasePixel() {
+            const x = document.getElementById('drawX').value;
+            const y = document.getElementById('drawY').value;
+            log(`Erasing pixel at (${x}, ${y})`, 'info');
+            await apiCall(`/drawing_pixel?x=${x}&y=${y}&state=0`);
+        }
+
+        async function testHorizontalLine() {
+            log('Testing horizontal line...', 'info');
+            for (let x = 100; x <= 150; x++) {
+                await apiCall(`/drawing_pixel?x=${x}&y=140&state=1`);
+            }
+            log('✅ Horizontal line complete', 'success');
+        }
+
+        async function testVerticalLine() {
+            log('Testing vertical line...', 'info');
+            for (let y = 100; y <= 150; y++) {
+                await apiCall(`/drawing_pixel?x=120&y=${y}&state=1`);
+            }
+            log('✅ Vertical line complete', 'success');
+        }
+
+        async function testBox() {
+            log('Testing box...', 'info');
+            // Top edge
+            for (let x = 50; x <= 100; x++) {
+                await apiCall(`/drawing_pixel?x=${x}&y=50&state=1`);
+            }
+            // Bottom edge
+            for (let x = 50; x <= 100; x++) {
+                await apiCall(`/drawing_pixel?x=${x}&y=100&state=1`);
+            }
+            // Left edge
+            for (let y = 50; y <= 100; y++) {
+                await apiCall(`/drawing_pixel?x=50&y=${y}&state=1`);
+            }
+            // Right edge
+            for (let y = 50; y <= 100; y++) {
+                await apiCall(`/drawing_pixel?x=100&y=${y}&state=1`);
+            }
+            log('✅ Box complete', 'success');
+        }
+
+        async function testDots() {
+            log('Testing random dots...', 'info');
+            for (let i = 0; i < 30; i++) {
+                const x = Math.floor(Math.random() * 240);
+                const y = Math.floor(Math.random() * 280);
+                await apiCall(`/drawing_pixel?x=${x}&y=${y}&state=1`);
+            }
+            log('✅ Random dots complete', 'success');
+        }
+
+        async function testCross() {
+            log('Testing cross pattern...', 'info');
+            // Horizontal bar
+            for (let x = 80; x <= 160; x++) {
+                await apiCall(`/drawing_pixel?x=${x}&y=140&state=1`);
+            }
+            // Vertical bar
+            for (let y = 100; y <= 180; y++) {
+                await apiCall(`/drawing_pixel?x=120&y=${y}&state=1`);
+            }
+            log('✅ Cross complete', 'success');
+        }
+
+        // Auto-detect Otto IP if on same network
+        log('🚀 Otto UDP Drawing Test Ready', 'success');
+        log('📡 Configure Otto IP and click Enable Drawing to start', 'info');
+    </script>
+</body>
+</html>

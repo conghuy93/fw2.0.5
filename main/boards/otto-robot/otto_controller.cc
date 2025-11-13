@@ -4,6 +4,7 @@
 
 #include <cJSON.h>
 #include <esp_log.h>
+#include <esp_netif.h>
 
 #include <cstring>
 
@@ -16,6 +17,12 @@
 #include "sdkconfig.h"
 #include "settings.h"
 
+// Forward declarations for web server control
+extern "C" {
+    esp_err_t otto_start_webserver(void);
+    esp_err_t otto_stop_webserver(void);
+}
+
 #define TAG "OttoController"
 #define ACTION_DOG_WAG_TAIL 22
 
@@ -26,7 +33,10 @@ private:
     QueueHandle_t action_queue_;
     bool is_action_in_progress_ = false;
     // Idle management
-    int idle_no_action_ticks_ = 0;    // seconds without actions (ActionTask polls every 1s)
+    // Accumulated idle time in milliseconds (we increment by LOOP_IDLE_INCREMENT_MS each idle cycle)
+    int idle_no_action_ticks_ = 0;    // milliseconds without actions
+    static constexpr int64_t IDLE_TIMEOUT_MS = 3600000; // 1 hour = 60 * 60 * 1000 ms
+    static constexpr int LOOP_IDLE_INCREMENT_MS = 20;   // Each idle loop adds 20 ms (vTaskDelay(20ms))
     bool idle_mode_ = false;          // true when idle behavior is active
 
     struct OttoActionParams {
@@ -64,7 +74,14 @@ private:
         ACTION_DELAY = 20,  // Delay in milliseconds, use 'speed' as delay duration
         ACTION_DOG_JUMP_HAPPY = 21,  // Special: Jump with happy emoji (for touch sensor)
         ACTION_DOG_ROLL_OVER = 23,  // New: Roll over movement
-        ACTION_DOG_PLAY_DEAD = 24  // New: Play dead movement
+        ACTION_DOG_PLAY_DEAD = 24,  // New: Play dead movement
+        
+        // New poses (Priority 1 + 2)
+        ACTION_DOG_SHAKE_PAW = 25,  // New: Shake paw (bắt tay)
+        ACTION_DOG_SIDESTEP = 26,  // New: Sidestep (đi ngang)
+    ACTION_DOG_PUSHUP = 27,  // New: Pushup exercise
+    ACTION_DOG_BALANCE = 28,  // New: Balance on hind legs
+    ACTION_DOG_TOILET = 29   // New: Toilet squat pose
     };
 
     static void ActionTask(void* arg) {
@@ -84,7 +101,23 @@ private:
                 
                 // Exit idle mode and re-attach servos if needed
                 if (controller->idle_mode_) {
-                    ESP_LOGI(TAG, "🔌 Waking up from idle - re-attaching servos");
+                    ESP_LOGI(TAG, "🔌 Waking up from idle - re-attaching servos and turning on display");
+                    
+                    // Turn on display first
+                    auto display = Board::GetInstance().GetDisplay();
+                    if (display) {
+                        display->SetPowerSaveMode(false);
+                    }
+                    auto backlight = Board::GetInstance().GetBacklight();
+                    if (backlight) {
+                        backlight->RestoreBrightness(); // Restore previous brightness
+                    }
+                    
+                    // Restart web server
+                    ESP_LOGI(TAG, "🌐 Restarting web server...");
+                    otto_start_webserver();
+                    
+                    // Re-attach servos
                     controller->otto_.AttachServos();
                     vTaskDelay(pdMS_TO_TICKS(50));  // Give servos time to stabilize
                 }
@@ -217,6 +250,32 @@ private:
                             if (display) display->SetEmotion("happy");
                         }
                         break;
+                    
+                    // New poses (Priority 1 + 2)
+                    case ACTION_DOG_SHAKE_PAW:
+                        ESP_LOGI(TAG, "🤝 DogShakePaw: shakes=%d, speed=%d", params.steps, params.speed);
+                        controller->otto_.DogShakePaw(params.steps, params.speed);
+                        break;
+                    
+                    case ACTION_DOG_SIDESTEP:
+                        ESP_LOGI(TAG, "⬅️➡️ DogSidestep: steps=%d, speed=%d, direction=%d", 
+                                 params.steps, params.speed, params.direction);
+                        controller->otto_.DogSidestep(params.steps, params.speed, params.direction);
+                        break;
+                    
+                    case ACTION_DOG_PUSHUP:
+                        ESP_LOGI(TAG, "💪 DogPushup: pushups=%d, speed=%d", params.steps, params.speed);
+                        controller->otto_.DogPushup(params.steps, params.speed);
+                        break;
+                    
+                    case ACTION_DOG_BALANCE:
+                        ESP_LOGI(TAG, "⚖️ DogBalance: duration=%d ms, speed=%d", params.steps, params.speed);
+                        controller->otto_.DogBalance(params.steps, params.speed);
+                        break;
+                    case ACTION_DOG_TOILET:
+                        ESP_LOGI(TAG, "🚽 DogToilet: hold=%d ms, speed=%d", params.steps, params.speed);
+                        controller->otto_.DogToilet(params.steps, params.speed);
+                        break;
                         
                     // Legacy actions (adapted for 4 servos)
                     case ACTION_WALK:
@@ -261,21 +320,46 @@ private:
                 ESP_LOGI(TAG, "✅ Action completed");
                 vTaskDelay(pdMS_TO_TICKS(20));
             } else {
-                // No action received within 1 second -> idle tick
-                controller->idle_no_action_ticks_++;
+                // No action received within the polling timeout -> accumulate idle time
+                controller->idle_no_action_ticks_ += LOOP_IDLE_INCREMENT_MS;
 
-                // Enter idle mode after 120s without actions
-                if (!controller->idle_mode_ && controller->idle_no_action_ticks_ >= 120) {
-                    ESP_LOGI(TAG, "🛌 Idle timeout reached (120s). Lying down.");
+                // Periodic progress log every 5 minutes (300000 ms)
+                if (!controller->idle_mode_ && (controller->idle_no_action_ticks_ % 300000) == 0) {
+                    int minutes = controller->idle_no_action_ticks_ / 60000;
+                    float percent = (controller->idle_no_action_ticks_ * 100.0f) / IDLE_TIMEOUT_MS;
+                    ESP_LOGI(TAG, "⌛ Idle for %d min (%.1f%% of 60 min timeout)", minutes, percent);
+                }
+
+                // Enter idle (power save) mode after 1 hour without actions
+                if (!controller->idle_mode_ && controller->idle_no_action_ticks_ >= IDLE_TIMEOUT_MS) {
+                    ESP_LOGI(TAG, "🛌 Idle timeout reached (1h). Entering power save: lying down, turning off display, stopping web server.");
                     controller->idle_mode_ = true;
 
-                    // Move to lie down posture at a gentle pace
+                    // Move to lie down posture at a gentle pace (single call)
                     controller->otto_.DogLieDown(1500);
+                    // Wait for movement to complete
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                    
+                    // Turn off display (power save mode + brightness 0)
+                    auto display = Board::GetInstance().GetDisplay();
+                    if (display) {
+                        display->SetPowerSaveMode(true);
+                    }
+                    auto backlight = Board::GetInstance().GetBacklight();
+                    if (backlight) {
+                        backlight->SetBrightness(0);
+                    }
+                    
+                    // Lie down posture already set above; no second DogLieDown needed
+                    ESP_LOGI(TAG, "🛌 Position settled, proceeding with servo detach and web server stop");
+
+                    // Stop web server to save power
+                    ESP_LOGI(TAG, "🌐 Stopping web server to save power...");
+                    otto_stop_webserver();
                     
                     // Detach servos to stop PWM - saves power and prevents servo jitter
-                    vTaskDelay(pdMS_TO_TICKS(500));  // Wait for movement to complete
                     controller->otto_.DetachServos();
-                    ESP_LOGI(TAG, "💤 Servos detached - power saving mode activated");
+                    ESP_LOGI(TAG, "💤 Servos detached - power saving mode activated (lie down position)");
                 }
             }
         }
@@ -371,6 +455,11 @@ public:
 
         ESP_LOGI(TAG, "🐕 Registering Kiki the Adorable Dog Robot MCP Tools...");
 
+        // NOTE: Trimmed tool set to respect 32-tool limit (system tools + motion tools = 32).
+        // Removed legacy otto.* tools and advanced/sequenced dog.* tools (defend, attack, celebrate, scratch,
+        // search, pushup, balance, test_servo, home) to reduce count.
+        // If future expansion needed, consider a single multiplexing tool (self.motion.run).
+
         // IMPORTANT: I am Kiki, a cute 4-legged dog robot! 🐶
         // I can walk, run, sit, lie down, jump, dance, wave, and do tricks like a real puppy!
         // Use these tools to control my movements and make me perform adorable actions.
@@ -404,14 +493,21 @@ public:
                            PropertyList({Property("steps", kPropertyTypeInteger, 2, 1, 10),
                                          Property("speed", kPropertyTypeInteger, 150, 50, 500)}),
                            [this](const PropertyList& properties) -> ReturnValue {
-                               int steps = properties["steps"].value<int>();
-                               int speed = properties["speed"].value<int>();
-                               ESP_LOGI(TAG, "⚡ IMMEDIATE ACTION: Walking backward %d steps at speed %dms", steps, speed);
-                               // FAST RESPONSE: Execute immediately like esp-hi
-                               otto_.DogWalkBack(steps, speed);
-                               otto_.WagTail(3, 100); // Happy tail wag!
-                               ESP_LOGI(TAG, "✅ Walk backward completed with tail wag");
-                               return true;
+                               try {
+                                   int steps = properties["steps"].value<int>();
+                                   int speed = properties["speed"].value<int>();
+                                   ESP_LOGI(TAG, "🐕 MCP walk_backward called: steps=%d, speed=%d", steps, speed);
+                                   
+                                   // Execute movement
+                                   otto_.DogWalkBack(steps, speed);
+                                   otto_.WagTail(3, 100);
+                                   
+                                   ESP_LOGI(TAG, "✅ Walk backward completed successfully");
+                                   return "Walked backward " + std::to_string(steps) + " steps at " + std::to_string(speed) + "ms speed";
+                               } catch (const std::exception& e) {
+                                   ESP_LOGE(TAG, "❌ Walk backward failed: %s", e.what());
+                                   throw;
+                               }
                            });
 
         mcp_server.AddTool("self.dog.turn_left",
@@ -609,60 +705,176 @@ public:
                                return true;
                            });
 
+        mcp_server.AddTool("self.dog.pushup",
+                           "🐕💪 I do pushup exercises like a strong puppy training! Make me do pushups to show my strength!\n"
+                           "Args:\n"
+                           "  pushups (1-10): How many pushup repetitions\n"
+                           "  speed (50-300ms): Movement speed between pushups\n"
+                           "Example: 'Otto, do pushups!' or 'Exercise time!' or 'Chống đẩy đi!' or 'Tập thể dục!'",
+                           PropertyList({Property("pushups", kPropertyTypeInteger, 3, 1, 10),
+                                         Property("speed", kPropertyTypeInteger, 150, 50, 300)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               int pushups = properties["pushups"].value<int>();
+                               int speed = properties["speed"].value<int>();
+                               ESP_LOGI(TAG, "💪 Kiki is doing pushups! Strong puppy!");
+                               // Set happy emoji
+                               if (auto display = Board::GetInstance().GetDisplay()) {
+                                   display->SetEmotion("happy");
+                               }
+                               // FAST RESPONSE: Execute immediately like esp-hi
+                               otto_.DogPushup(pushups, speed);
+                               return true;
+                           });
+
+        mcp_server.AddTool("self.dog.toilet",
+                           "🐕🚽 I squat down like a puppy doing bathroom business! Make me do toilet pose!\n"
+                           "Args:\n"
+                           "  hold_ms (1000-5000ms): How long to hold the squat position\n"
+                           "  speed (50-300ms): Movement speed\n"
+                           "Example: 'Otto, go to toilet!' or 'Đi vệ sinh đi!' or 'Bathroom time!'",
+                           PropertyList({Property("hold_ms", kPropertyTypeInteger, 3000, 1000, 5000),
+                                         Property("speed", kPropertyTypeInteger, 150, 50, 300)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               int hold_ms = properties["hold_ms"].value<int>();
+                               int speed = properties["speed"].value<int>();
+                               ESP_LOGI(TAG, "🚽 Kiki is doing toilet pose!");
+                               // Set embarrassed emoji
+                               if (auto display = Board::GetInstance().GetDisplay()) {
+                                   display->SetEmotion("embarrassed");
+                               }
+                               // FAST RESPONSE: Execute immediately like esp-hi
+                               otto_.DogToilet(hold_ms, speed);
+                               // Reset emotion after
+                               if (auto display = Board::GetInstance().GetDisplay()) {
+                                   display->SetEmotion("neutral");
+                               }
+                               return true;
+                           });
+
+        mcp_server.AddTool("self.show_qr",
+                           "📱 I show a winking face for 30 seconds to display QR code! Use this when user asks to show QR code, activation code, or control panel access!\n"
+                           "This will display a playful winking emoji for 30 seconds (no movement, no text).\n"
+                           "Example: 'Show me the QR code' or 'Mở mã QR' or 'Display control panel' or 'Hiển thị mã kích hoạt'",
+                           PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               ESP_LOGI(TAG, "📱 MCP QR tool called: showing winking emoji for 30s");
+                               auto display = Board::GetInstance().GetDisplay();
+                               if (display) {
+                                   display->SetEmotion("winking");
+                                   ESP_LOGI(TAG, "😉 Winking emoji set");
+                               }
+                               // Create task to reset emotion after 30 seconds
+                               xTaskCreate([](void* arg) {
+                                   vTaskDelay(pdMS_TO_TICKS(30000));
+                                   auto disp = Board::GetInstance().GetDisplay();
+                                   if (disp) {
+                                       disp->SetEmotion("neutral");
+                                   }
+                                   ESP_LOGI("OttoController", "🔓 QR display ended, emotion reset to neutral");
+                                   vTaskDelete(NULL);
+                               }, "qr_reset", 2048, nullptr, 1, NULL);
+                               return true;
+                           });
+
+        mcp_server.AddTool("self.show_ip",
+                           "📱 I display my WiFi IP address on screen for 30 seconds! Use this when user asks for IP address, network info, or WiFi details!\n"
+                           "This will show the device's current IP address with a happy emoji for 30 seconds.\n"
+                           "Example: 'Show me your IP' or 'Địa chỉ IP là gì' or 'What's your IP address' or 'Hiển thị 192.168'",
+                           PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               ESP_LOGI(TAG, "📱 MCP show_ip tool called: displaying for 30s");
+                               auto display = Board::GetInstance().GetDisplay();
+                               if (display) {
+                                   display->SetEmotion("happy");
+                               }
+                               
+                               // Get IP address
+                               esp_netif_ip_info_t ip_info;
+                               esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                               if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+                                   char ip_str[64];
+                                   snprintf(ip_str, sizeof(ip_str), "📱 IP: %d.%d.%d.%d", 
+                                            IP2STR(&ip_info.ip));
+                                   ESP_LOGI(TAG, "🌟 Station IP: " IPSTR, IP2STR(&ip_info.ip));
+                                   if (display) {
+                                       display->SetChatMessage("system", ip_str);
+                                   }
+                                   // Keep display for 30 seconds
+                                   xTaskCreate([](void* arg) {
+                                       vTaskDelay(pdMS_TO_TICKS(30000));
+                                       auto disp = Board::GetInstance().GetDisplay();
+                                       if (disp) {
+                                           disp->SetEmotion("neutral");
+                                           disp->SetChatMessage("", "");
+                                       }
+                                       ESP_LOGI("OttoController", "🔓 IP display ended");
+                                       vTaskDelete(NULL);
+                                   }, "ip_reset", 2048, nullptr, 1, NULL);
+                               } else {
+                                   ESP_LOGE(TAG, "❌ Failed to get IP info");
+                                   if (display) {
+                                       display->SetChatMessage("system", "WiFi chưa kết nối!");
+                                   }
+                               }
+                               return true;
+                           });
+
+        mcp_server.AddTool("self.webserver.open",
+                           "🌐 I start the web server control panel and display IP address for 15 seconds! Use this when user wants to open control panel, web interface, or access robot controls!\n"
+                           "This will start the HTTP server on port 80 (auto-stops after 30 minutes) and show IP on screen.\n"
+                           "Example: 'Open control panel' or 'Mở trang điều khiển' or 'Start web server' or 'Bật web interface'",
+                           PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               ESP_LOGI(TAG, "🌐 MCP webserver.open called - will display IP for 15s");
+                               extern bool webserver_enabled;
+                               auto display = Board::GetInstance().GetDisplay();
+                               
+                               if (!webserver_enabled) {
+                                   ESP_LOGI(TAG, "🌐 Starting webserver...");
+                                   esp_err_t err = otto_start_webserver();
+                                   if (err != ESP_OK) {
+                                       ESP_LOGE(TAG, "❌ Failed to start webserver");
+                                       return false;
+                                   }
+                               } else {
+                                   ESP_LOGI(TAG, "🌐 Webserver already running");
+                               }
+                               
+                               // Display IP address with happy emoji for 15 seconds
+                               if (display) {
+                                   display->SetEmotion("happy");
+                                   
+                                   // Get IP address
+                                   esp_netif_ip_info_t ip_info;
+                                   esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                                   if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+                                       char ip_str[64];
+                                       snprintf(ip_str, sizeof(ip_str), "📱 IP: %d.%d.%d.%d", 
+                                                IP2STR(&ip_info.ip));
+                                       ESP_LOGI(TAG, "🌟 Station IP: " IPSTR, IP2STR(&ip_info.ip));
+                                       display->SetChatMessage("system", ip_str);
+                                       
+                                       // Keep display for 15 seconds
+                                       xTaskCreate([](void* arg) {
+                                           vTaskDelay(pdMS_TO_TICKS(15000));
+                                           auto disp = Board::GetInstance().GetDisplay();
+                                           if (disp) {
+                                               disp->SetEmotion("neutral");
+                                               disp->SetChatMessage("", "");
+                                           }
+                                           ESP_LOGI("OttoController", "🔓 IP display cleared after 15s");
+                                           vTaskDelete(NULL);
+                                       }, "mcp_panel_ip", 2048, nullptr, 1, NULL);
+                                   } else {
+                                       ESP_LOGE(TAG, "❌ Failed to get IP info");
+                                       display->SetChatMessage("system", "✅ Web server đã khởi động!");
+                                   }
+                               }
+                               
+                               return true;
+                           });
+
         // Legacy movement functions (for compatibility - prefer self.dog.* tools for newer features!)
-        mcp_server.AddTool("self.otto.walk",
-                           "🐕 [Legacy] Classic walk mode for backward compatibility.\n"
-                           "Args:\n"
-                           "  steps (1-20): Number of steps\n"
-                           "  period (500-2000ms): Movement period\n"
-                           "  direction (1=forward, -1=backward)\n"
-                           "Note: Prefer using self.dog.walk_forward or self.dog.walk_backward instead!",
-                           PropertyList({Property("steps", kPropertyTypeInteger, 4, 1, 20),
-                                         Property("period", kPropertyTypeInteger, 1000, 500, 2000),
-                                         Property("direction", kPropertyTypeInteger, 1, -1, 1)}),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               int steps = properties["steps"].value<int>();
-                               int period = properties["period"].value<int>();
-                               int direction = properties["direction"].value<int>();
-                               QueueAction(ACTION_WALK, steps, period, direction, 0);
-                               ESP_LOGI(TAG, "🐾 Otto legacy walk: steps=%d, period=%d, dir=%d", steps, period, direction);
-                               return true;
-                           });
-
-        mcp_server.AddTool("self.otto.turn",
-                           "🐕 [Legacy] Classic turn mode for backward compatibility.\n"
-                           "Args:\n"
-                           "  steps (1-20): Number of turn steps\n"
-                           "  period (1000-3000ms): Movement period\n"
-                           "  direction (1=left, -1=right)\n"
-                           "Note: Prefer using self.dog.turn_left or self.dog.turn_right instead!",
-                           PropertyList({Property("steps", kPropertyTypeInteger, 4, 1, 20),
-                                         Property("period", kPropertyTypeInteger, 2000, 1000, 3000),
-                                         Property("direction", kPropertyTypeInteger, 1, -1, 1)}),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               int steps = properties["steps"].value<int>();
-                               int period = properties["period"].value<int>();
-                               int direction = properties["direction"].value<int>();
-                               QueueAction(ACTION_TURN, steps, period, direction, 0);
-                               ESP_LOGI(TAG, "🐾 Otto legacy turn: steps=%d, period=%d, dir=%d", steps, period, direction);
-                               return true;
-                           });
-
-        mcp_server.AddTool("self.otto.jump",
-                           "🐕 [Legacy] Classic jump mode for backward compatibility.\n"
-                           "Args:\n"
-                           "  steps (1-10): Number of jumps\n"
-                           "  period (1000-3000ms): Movement period\n"
-                           "Note: Prefer using self.dog.jump instead!",
-                           PropertyList({Property("steps", kPropertyTypeInteger, 1, 1, 10),
-                                         Property("period", kPropertyTypeInteger, 2000, 1000, 3000)}),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               int steps = properties["steps"].value<int>();
-                               int period = properties["period"].value<int>();
-                               QueueAction(ACTION_JUMP, steps, period, 0, 0);
-                               ESP_LOGI(TAG, "🐾 Otto legacy jump: steps=%d, period=%d", steps, period);
-                               return true;
-                           });
 
         // System tools
         mcp_server.AddTool("self.dog.stop", 
@@ -683,101 +895,9 @@ public:
                                return true;
                            });
 
-        mcp_server.AddTool("self.dog.home", 
-                           "🐕 I return to my standard standing position like a well-trained puppy! Make me stand at attention!\n"
-                           "Example: 'Otto, go home!' or 'Stand up straight!' or 'Reset position!'", 
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki going home! 🏠");
-                               // FAST RESPONSE: Execute immediately like esp-hi
-                               otto_.Home();
-                               return true;
-                           });
 
-        // Combat/Action Sequences
-        mcp_server.AddTool("self.dog.defend",
-                           "🐕 I defend myself like a protective puppy! I back away, sit down, and lie low to protect myself!\n"
-                           "This is a defense sequence: walk back 1 step → sit (3s) → lie down → wait (3s) → stand back up.\n"
-                           "Example: 'Otto, defend yourself!' or 'Protect yourself!' or 'Get into defense position!'",
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki is defending! 🛡️ (back → sit → lie → home)");
-                               // Set shocked emoji and keep it during entire defense sequence
-                               auto display = Board::GetInstance().GetDisplay();
-                               if (display) {
-                                   display->SetEmotion("shocked");
-                               }
-                               // FAST RESPONSE: Execute sequence immediately
-                               otto_.DogWalkBack(1, 100);
-                               otto_.DogSitDown(3000);
-                               otto_.DogLieDown(1500);
-                               vTaskDelay(pdMS_TO_TICKS(3000));
-                               otto_.Home();
-                               // Reset to neutral after defense complete
-                               if (display) {
-                                   display->SetEmotion("neutral");
-                               }
-                               return ""; // Return empty string - no text display, emoji only
-                           });
-
-        mcp_server.AddTool("self.dog.attack",
-                           "🐕 I attack like a fierce little puppy! I charge forward, jump, and bow down!\n"
-                           "This is an attack sequence: walk forward 2 steps → jump → bow.\n"
-                           "Example: 'Otto, attack!' or 'Charge forward!' or 'Go get them!'",
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki is attacking! ⚔️ (forward → jump → bow)");
-                               // Set angry emoji and keep it during entire attack sequence
-                               auto display = Board::GetInstance().GetDisplay();
-                               if (display) {
-                                   display->SetEmotion("angry");
-                               }
-                               // FAST RESPONSE: Execute sequence immediately
-                               otto_.DogWalk(2, 100);
-                               otto_.DogJump(200);
-                               otto_.DogBow(1000);
-                               // Reset to neutral after attack complete
-                               if (display) {
-                                   display->SetEmotion("neutral");
-                               }
-                               return true;
-                           });
-
-        mcp_server.AddTool("self.dog.celebrate",
-                           "🐕 I celebrate like a victorious puppy! I dance, wave, and swing with pure joy!\n"
-                           "This is a celebration sequence: dance 2x → wave 3x → swing 4x.\n"
-                           "Example: 'Otto, celebrate!' or 'You did it!' or 'Victory dance!'",
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki is celebrating! 🎉 (dance → wave → swing)");
-                               // Set happy emoji and keep during celebration
-                               auto display = Board::GetInstance().GetDisplay();
-                               if (display) {
-                                   display->SetEmotion("happy");
-                               }
-                               // FAST RESPONSE: Execute sequence immediately
-                               otto_.DogDance(2, 200);
-                               otto_.DogWaveRightFoot(3, 50);
-                               otto_.DogSwing(4, 10);
-                               // Reset to neutral after celebration
-                               if (display) {
-                                   display->SetEmotion("neutral");
-                               }
-                               return true;
-                           });
-
-        mcp_server.AddTool("self.dog.scratch",
-                           "🐕 I scratch like a puppy with an itch! I sit down and move my back right leg to scratch!\n"
-                           "This scratches 5 times while sitting.\n"
-                           "Example: 'Otto, scratch!' or 'Got an itch?' or 'Scratch yourself!'",
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki is scratching! 🐶");
-                               // FAST RESPONSE: Execute immediately like esp-hi
-                               otto_.DogScratch(5, 50);
-                               return true;
-                           });
-
+        // Comment out to reduce tool count below 32 limit
+        /*
         mcp_server.AddTool("self.dog.greet",
                            "🐕 I greet people like a friendly puppy! I stand up, wave my paw, and bow politely!\n"
                            "This is a greeting sequence: stand → wave 5x → bow.\n"
@@ -800,7 +920,10 @@ public:
                                }
                                return true;
                            });
+        */
 
+        // Comment out to reduce tool count below 32 limit
+        /*
         mcp_server.AddTool("self.dog.retreat",
                            "🐕 I retreat like a cautious puppy escaping danger! I back up fast, turn around, and run away!\n"
                            "This is a retreat sequence: walk back 3 steps → turn right 4x → walk forward 2 steps.\n"
@@ -823,49 +946,52 @@ public:
                                }
                                return true;
                            });
+        */
 
-        mcp_server.AddTool("self.dog.search",
-                           "🐕 I search around like a curious puppy exploring! I look left, right, and walk forward to investigate!\n"
-                           "This is a search sequence: turn left 2x → turn right 4x → turn left 2x → walk forward 2 steps.\n"
-                           "Example: 'Otto, search around!' or 'Explore the area!' or 'Look around!'",
-                           PropertyList(),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🐾 Kiki is searching! 🔍 (look around → walk forward)");
-                               // Set curious/surprised emoji and keep during search
-                               auto display = Board::GetInstance().GetDisplay();
-                               if (display) {
-                                   display->SetEmotion("surprised");
-                               }
-                               // FAST RESPONSE: Execute sequence immediately
-                               otto_.DogTurnLeft(2, 150);
-                               otto_.DogTurnRight(4, 150);
-                               otto_.DogTurnLeft(2, 150);
-                               otto_.DogWalk(2, 150);
-                               // Reset to neutral after search
-                               if (display) {
-                                   display->SetEmotion("neutral");
-                               }
-                               return true;
-                           });
 
-        // Debug tool for testing individual servos
-        mcp_server.AddTool("self.dog.test_servo",
-                           "🐕 I test my servo motors like a robot puppy in maintenance mode! This moves one leg to a specific angle.\n"
+        // New poses (Priority 1 + 2)
+        // Comment out shake_paw to reduce tool count
+        /*
+        mcp_server.AddTool("self.dog.shake_paw",
+                           "🐕 I shake my paw like greeting a friend! I lift my right paw and shake it to say hello!\n"
                            "Args:\n"
-                           "  servo_id (0-3): Which servo to test (0=LF, 1=RF, 2=LB, 3=RB)\n"
-                           "  angle (0-180): Target angle in degrees\n"
-                           "Example: 'Test servo 0 at 90 degrees' (for debugging only)",
-                           PropertyList({Property("servo_id", kPropertyTypeInteger, 0, 0, 3),
-                                         Property("angle", kPropertyTypeInteger, 90, 0, 180)}),
+                           "  shakes (1-5): How many times to shake paw\n"
+                           "  speed (50-300ms): Shake speed\n"
+                           "Example: 'Otto, shake paw!' or 'Give me your paw!' or 'Shake hands!'",
+                           PropertyList({Property("shakes", kPropertyTypeInteger, 3, 1, 5),
+                                         Property("speed", kPropertyTypeInteger, 150, 50, 300)}),
                            [this](const PropertyList& properties) -> ReturnValue {
-                               int servo_id = properties["servo_id"].value<int>();
-                               int angle = properties["angle"].value<int>();
-                               ESP_LOGI(TAG, "🐾 Testing servo %d at angle %d", servo_id, angle);
-                               otto_.ServoAngleSet(servo_id, angle, 500);
+                               int shakes = properties["shakes"].value<int>();
+                               int speed = properties["speed"].value<int>();
+                               ESP_LOGI(TAG, "🤝 Kiki is shaking paw!");
+                               otto_.DogShakePaw(shakes, speed);
                                return true;
                            });
+        */
 
-        ESP_LOGI(TAG, "🐾 Dog Robot MCP tools registered! Kiki is ready to be a cute puppy! 🐶");
+        // Comment out sidestep to reduce tool count
+        /*
+        mcp_server.AddTool("self.dog.sidestep",
+                           "🐕 I sidestep like moving sideways! I can step left or right without turning!\n"
+                           "Args:\n"
+                           "  steps (1-10): How many sidesteps to take\n"
+                           "  speed (50-300ms): Sidestep speed\n"
+                           "  direction (1=right, -1=left): Which direction to sidestep\n"
+                           "Example: 'Otto, step to the right!' or 'Move sideways left!'",
+                           PropertyList({Property("steps", kPropertyTypeInteger, 3, 1, 10),
+                                         Property("speed", kPropertyTypeInteger, 150, 50, 300),
+                                         Property("direction", kPropertyTypeInteger, 1, -1, 1)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               int steps = properties["steps"].value<int>();
+                               int speed = properties["speed"].value<int>();
+                               int direction = properties["direction"].value<int>();
+                               ESP_LOGI(TAG, "⬅️➡️ Kiki is sidestepping!");
+                               otto_.DogSidestep(steps, speed, direction);
+                               return true;
+                           });
+        */
+
+        ESP_LOGI(TAG, "🐾 Dog Robot MCP tools registered (trimmed for 32-tool limit)! 🐶");
     }
 
     // Public method for web server to queue actions

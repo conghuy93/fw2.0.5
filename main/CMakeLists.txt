@@ -28,6 +28,7 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
+            "gemini_client.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -463,6 +464,11 @@ elseif(CONFIG_BOARD_TYPE_ESP32_S3_1_28_BOX)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)
 elseif(CONFIG_BOARD_TYPE_OTTO_ROBOT)
     set(BOARD_TYPE "otto-robot")
+    set(BUILTIN_TEXT_FONT font_puhui_16_4)
+    set(BUILTIN_ICON_FONT font_awesome_16_4)
+    set(DEFAULT_EMOJI_COLLECTION twemoji_32)
+elseif(CONFIG_BOARD_TYPE_KIKI_ROBOT)
+    set(BOARD_TYPE "kiki-robot")
     set(BUILTIN_TEXT_FONT font_puhui_16_4)
     set(BUILTIN_ICON_FONT font_awesome_16_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_32)

@@ -4,6 +4,7 @@
  */
 
 #include "mcp_server.h"
+#include "boards/otto-robot/otto_webserver.h"
 #include <esp_log.h>
 #include <esp_app_desc.h>
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include "display.h"
 #include "oled_display.h"
 #include "board.h"
+#include "boards/common/music.h"
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
@@ -120,6 +122,73 @@ void McpServer::AddCommonTools() {
             });
     }
 #endif
+
+    // Music streaming tools
+    auto music_player = board.GetMusicPlayer();
+    if (music_player) {
+        AddTool("self.music.play",
+            "Play music from an HTTP URL. Supports streaming MP3 format.\n"
+            "Args:\n"
+            "  `url`: The HTTP URL of the music file (MP3 format).\n"
+            "Return:\n"
+            "  true if playback started successfully, false otherwise.",
+            PropertyList({
+                Property("url", kPropertyTypeString)
+            }),
+            [music_player](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                ESP_LOGI(TAG, "Starting music playback: %s", url.c_str());
+                
+                bool success = music_player->StartStreaming(url);
+                if (success) {
+                    return true;
+                } else {
+                    return false;
+                }
+            });
+
+        AddTool("self.music.stop",
+            "Stop the currently playing music.\n"
+            "Return:\n"
+            "  true if music was stopped successfully.",
+            PropertyList(),
+            [music_player](const PropertyList& properties) -> ReturnValue {
+                ESP_LOGI(TAG, "Stopping music playback");
+                music_player->Stop();
+                return true;
+            });
+
+        AddTool("self.music.status",
+            "Get the current status of the music player.\n"
+            "Return:\n"
+            "  A JSON object with playback status information (is_playing, is_downloading, buffer_size).",
+            PropertyList(),
+            [music_player](const PropertyList& properties) -> ReturnValue {
+                std::string status_json = "{";
+                status_json += "\"is_playing\": " + std::string(music_player->IsPlaying() ? "true" : "false") + ",";
+                status_json += "\"is_downloading\": " + std::string(music_player->IsDownloading() ? "true" : "false") + ",";
+                status_json += "\"buffer_size\": " + std::to_string(music_player->GetBufferSize());
+                status_json += "}";
+                return status_json;
+            });
+    }
+
+    // Dog pose info tool (informational only, does NOT execute movements to keep tool count low)
+    AddTool("self.dog.pose_info",
+        "Provide descriptive information about special dog poses/movements without executing them.\n"
+        "Poses documented:\n"
+        "  - 'chong day' (pushup): Repeated lowering and raising of front body; adjustable count & speed via web UI button '💪 Chống Đẩy'.\n"
+        "  - 'di ve sinh' (toilet pose): Static pose simulating squat; currently NOT exposed as an MCP actionable tool.\n"
+        "Usage: Call to learn available pose names before asking user to trigger via web interface.\n"
+        "Return: JSON object: { poses: [ {name, available, parameters, description} ] }",
+        PropertyList(),
+        [] (const PropertyList& properties) -> ReturnValue {
+            std::string json = "{\"poses\":[";
+            json += "{\"name\":\"chong_day\",\"available\":true,\"parameters\":{\"pushups\":\"int (default 3)\",\"speed\":\"delay ms (default 150)\"},\"description\":\"Push-up exercise; use web action dog_pushup to perform.\"},";
+            json += "{\"name\":\"di_ve_sinh\",\"available\":false,\"parameters\":{},\"description\":\"Toilet/squat pose not implemented as MCP tool; could be added later if needed.\"}";
+            json += "]}";
+            return json;
+        });
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
@@ -300,6 +369,41 @@ void McpServer::AddUserOnlyTools() {
                 return true;
             });
     }
+
+    // Web server control tools
+    extern bool webserver_enabled;
+    
+    AddUserOnlyTool("self.webserver.start", "Start the web server",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            esp_err_t err = otto_start_webserver();
+            if (err == ESP_OK) {
+                return "Web server started successfully";
+            } else {
+                return "Failed to start web server: " + std::string(esp_err_to_name(err));
+            }
+        });
+
+    AddUserOnlyTool("self.webserver.stop", "Stop the web server",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            esp_err_t err = otto_stop_webserver();
+            if (err == ESP_OK) {
+                return "Web server stopped successfully";
+            } else {
+                return "Failed to stop web server: " + std::string(esp_err_to_name(err));
+            }
+        });
+
+    AddUserOnlyTool("self.webserver.status", "Get web server status",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+            if (webserver_enabled) {
+                return "Web server is running on port 80";
+            } else {
+                return "Web server is stopped";
+            }
+        });
 }
 
 void McpServer::AddTool(McpTool* tool) {

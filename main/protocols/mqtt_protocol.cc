@@ -8,6 +8,10 @@
 #include <arpa/inet.h>
 #include "assets/lang_config.h"
 
+#ifdef CONFIG_BOARD_TYPE_OTTO_ROBOT
+#include "../boards/otto-robot/otto_webserver.h"
+#endif
+
 #define TAG "MQTT"
 
 MqttProtocol::MqttProtocol() {
@@ -110,6 +114,16 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
             ESP_LOGI(TAG, "Received goodbye message, session_id: %s", session_id ? session_id->valuestring : "null");
             if (session_id == nullptr || session_id_ == session_id->valuestring) {
                 Application::GetInstance().Schedule([this]() {
+                    // Sit down for 5 seconds before closing audio channel (only once per goodbye)
+                    #ifdef CONFIG_BOARD_TYPE_OTTO_ROBOT
+                    if (!goodbye_action_queued_) {
+                        otto_controller_queue_action(5, 1, 5000, 0, 0);  // ACTION_DOG_SIT_DOWN=5, duration=5000ms
+                        goodbye_action_queued_ = true;
+                        ESP_LOGI(TAG, "🪑 Queued sit down action (5s) before goodbye");
+                    } else {
+                        ESP_LOGI(TAG, "⏭️ Skipping duplicate goodbye sit down action");
+                    }
+                    #endif
                     CloseAudioChannel();
                 });
             }
@@ -205,6 +219,7 @@ bool MqttProtocol::OpenAudioChannel() {
 
     error_occurred_ = false;
     session_id_ = "";
+    goodbye_action_queued_ = false;  // Reset goodbye flag for new session
     xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
 
     auto message = GetHelloMessage();

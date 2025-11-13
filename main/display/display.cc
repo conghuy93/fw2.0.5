@@ -51,6 +51,11 @@ void Display::SetTheme(Theme* theme) {
     settings.SetString("theme", theme->name());
 }
 
+// TODO: Implement SetMusicInfo properly
+// void Display::SetMusicInfo(const char* song_name) {
+//     // Default no-op implementation for boards without music display
+// }
+
 void Display::SetPowerSaveMode(bool on) {
     ESP_LOGW(TAG, "SetPowerSaveMode: %d", on);
 }

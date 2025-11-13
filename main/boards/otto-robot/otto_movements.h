@@ -79,6 +79,11 @@ public:
     void WagTail(int wags = 5, int speed_delay = 100);  // New: Wag tail movement
     void DogRollOver(int rolls = 1, int speed_delay = 200);  // New: Roll over movement
     void DogPlayDead(int duration_seconds = 5);  // New: Play dead (lie down and stay still)
+    void DogShakePaw(int shakes = 3, int speed_delay = 150);  // New: Shake paw (bắt tay)
+    void DogSidestep(int steps = 3, int speed_delay = 150, int direction = 1);  // New: Sidestep (đi ngang)
+    void DogPushup(int pushups = 3, int speed_delay = 150);  // New: Pushup exercise
+    void DogBalance(int duration_ms = 2000, int speed_delay = 150);  // New: Balance on hind legs
+    void DogToilet(int hold_ms = 3000, int speed_delay = 150); // New: Toilet squat pose
 
     //-- Legacy movement functions (adapted to work with 4 servos)
     void Jump(float steps = 1, int period = 2000);
