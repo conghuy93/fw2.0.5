@@ -1,4 +1,11 @@
 {
-  "version": "1.0.2",
-  "firmware_url": "https://conghuy93.github.io/otanew/firmware.bin"
+    "firmware_url":  "https://github.com/nguyenconghuy2904-source/xiaozhi-esp32-otto-robot/releases/download/v1.0.0/xiaozhi-1.0.0.bin",
+    "version":  "1.0.0",
+    "sha256":  "f90bcc05664827af302cbc7aa9fab2251f864bd5b14e82af96ac9a63ab16d2bd",
+    "release_date":  "2025-11-14T05:28:53Z",
+    "changelog":  [
+                      "Update to version 1.0.0",
+                      "Bug fixes and improvements"
+                  ],
+    "size":  3847600
 }
