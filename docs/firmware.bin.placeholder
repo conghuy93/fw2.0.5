@@ -1,0 +1,30 @@
+# GitHub Pages OTA - Placeholder
+
+This file will be replaced with the actual firmware binary (.bin file) when you build and deploy.
+
+## How to update firmware:
+
+1. Build your firmware:
+   ```bash
+   idf.py build
+   ```
+
+2. Copy the binary here:
+   ```bash
+   cp build/xiaozhi-esp32.bin docs/firmware.bin
+   ```
+
+3. Update version in `docs/version.json`
+
+4. Commit and push:
+   ```bash
+   git add docs/
+   git commit -m "Update firmware to vX.X.X"
+   git push origin main
+   ```
+
+Your ESP32 devices will automatically check for updates and download the new firmware.
+
+---
+
+**Note:** This placeholder file should be replaced with an actual `.bin` file before ESP32 devices can update.

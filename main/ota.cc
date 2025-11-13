@@ -208,32 +208,51 @@ bool Ota::CheckVersion() {
 
     has_new_version_ = false;
     cJSON *firmware = cJSON_GetObjectItem(root, "firmware");
+    
+    // Support two JSON formats:
+    // 1. GitHub Pages format: {"version":"1.0.1","firmware_url":"https://..."}
+    // 2. Server format: {"firmware":{"version":"1.0.1","url":"https://..."}}
+    
+    cJSON *version_node = NULL;
+    cJSON *url_node = NULL;
+    cJSON *force = NULL;
+    bool is_github_pages_format = false;
+    
     if (cJSON_IsObject(firmware)) {
-        cJSON *version = cJSON_GetObjectItem(firmware, "version");
-        if (cJSON_IsString(version)) {
-            firmware_version_ = version->valuestring;
-        }
-        cJSON *url = cJSON_GetObjectItem(firmware, "url");
-        if (cJSON_IsString(url)) {
-            firmware_url_ = url->valuestring;
-        }
+        // Server format with nested "firmware" object
+        ESP_LOGI(TAG, "Using server OTA format");
+        version_node = cJSON_GetObjectItem(firmware, "version");
+        url_node = cJSON_GetObjectItem(firmware, "url");
+        force = cJSON_GetObjectItem(firmware, "force");
+    } else {
+        // GitHub Pages format with flat structure
+        ESP_LOGI(TAG, "Using GitHub Pages OTA format");
+        version_node = cJSON_GetObjectItem(root, "version");
+        url_node = cJSON_GetObjectItem(root, "firmware_url");
+        is_github_pages_format = true;
+    }
+    
+    if (cJSON_IsString(version_node)) {
+        firmware_version_ = version_node->valuestring;
+    }
+    if (cJSON_IsString(url_node)) {
+        firmware_url_ = url_node->valuestring;
+    }
 
-        if (cJSON_IsString(version) && cJSON_IsString(url)) {
-            // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
-            has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
-            if (has_new_version_) {
-                ESP_LOGI(TAG, "New version available: %s", firmware_version_.c_str());
-            } else {
-                ESP_LOGI(TAG, "Current is the latest version");
-            }
-            // If the force flag is set to 1, the given version is forced to be installed
-            cJSON *force = cJSON_GetObjectItem(firmware, "force");
-            if (cJSON_IsNumber(force) && force->valueint == 1) {
-                has_new_version_ = true;
-            }
+    if (cJSON_IsString(version_node) && cJSON_IsString(url_node)) {
+        // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
+        has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
+        if (has_new_version_) {
+            ESP_LOGI(TAG, "New version available: %s", firmware_version_.c_str());
+        } else {
+            ESP_LOGI(TAG, "Current is the latest version");
+        }
+        // If the force flag is set to 1, the given version is forced to be installed (server format only)
+        if (!is_github_pages_format && cJSON_IsNumber(force) && force->valueint == 1) {
+            has_new_version_ = true;
         }
     } else {
-        ESP_LOGW(TAG, "No firmware section found!");
+        ESP_LOGW(TAG, "No valid firmware version or URL found!");
     }
 
     cJSON_Delete(root);
