@@ -27,7 +27,7 @@ static char selected_poses[200] = "sit,wave,bow,stretch,swing,dance";  // Defaul
 static bool auto_emoji_enabled = false;
 static TimerHandle_t auto_emoji_timer = NULL;
 static uint32_t auto_emoji_interval_ms = 10000;  // Default 10 seconds
-static char selected_emojis[300] = "happy,laughing,winking,cool,love,surprised,excited,sleepy,sad,angry,confused,thinking,neutral,shocked";  // Default all
+static char selected_emojis[300] = "happy,laughing,winking,cool,love,surprised,excited,sleepy,sad,angry,confused,thinking,neutral,shocked,silly";  // Default all
 
 // Webserver auto-stop timer (30 minutes)
 static TimerHandle_t webserver_auto_stop_timer = NULL;
@@ -105,9 +105,9 @@ void auto_emoji_timer_callback(TimerHandle_t xTimer) {
     static const char* all_emojis[] = {
         "happy", "laughing", "winking", "cool", "love",
         "surprised", "excited", "sleepy", "sad", "angry",
-        "confused", "thinking", "neutral", "shocked"
+        "confused", "thinking", "neutral", "shocked", "silly"
     };
-    static const int total_emojis = 14;
+    static const int total_emojis = 15;
 
     // Count enabled emojis and find random one
     int enabled_count = 0;
@@ -466,6 +466,7 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"crazy\")'>🤪 Điên</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"shocked\")'>😱 Sốc</button>");
     httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"winking\")'> Nháy Mắt Lém</button>");
+    httpd_resp_sendstr_chunk(req, "<button class='btn emoji-btn' onclick='sendEmotion(\"silly\")'>🤪 Ngố</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
     
@@ -583,6 +584,7 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_thinking' checked><label for='emoji_thinking'>🤔 Suy Nghĩ (Thinking)</label></div>");
     httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_neutral' checked><label for='emoji_neutral'>😐 Bình Thường (Neutral)</label></div>");
     httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_shocked' checked><label for='emoji_shocked'>😱 Sốc (Shocked)</label></div>");
+    httpd_resp_sendstr_chunk(req, "<div class='pose-item'><input type='checkbox' id='emoji_silly' checked><label for='emoji_silly'>🤪 Ngố (Silly)</label></div>");
     
     httpd_resp_sendstr_chunk(req, "<button class='btn toggle-btn' id='autoEmojiBtn' onclick='toggleAutoEmoji()' style='width: 100%; margin-top: 15px; font-size: 16px; background: linear-gradient(145deg, #ff9800, #ffa726);'>😊 Bật/Tắt Auto Emoji</button>");
     httpd_resp_sendstr_chunk(req, "</div>");
@@ -787,7 +789,7 @@ void send_otto_control_page(httpd_req_t *req) {
     
     // Auto emoji toggle JavaScript with emoji selection
     httpd_resp_sendstr_chunk(req, "var autoEmojiEnabled = false;");
-    httpd_resp_sendstr_chunk(req, "var selectedEmojis = ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked'];"); // Default all enabled
+    httpd_resp_sendstr_chunk(req, "var selectedEmojis = ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked','silly'];"); // Default all enabled
     httpd_resp_sendstr_chunk(req, "function toggleAutoEmoji() {");
     httpd_resp_sendstr_chunk(req, "  autoEmojiEnabled = !autoEmojiEnabled;");
     httpd_resp_sendstr_chunk(req, "  var btn = document.getElementById('autoEmojiBtn');");
@@ -816,7 +818,7 @@ void send_otto_control_page(httpd_req_t *req) {
     // Update selected emojis
     httpd_resp_sendstr_chunk(req, "function updateSelectedEmojis() {");
     httpd_resp_sendstr_chunk(req, "  selectedEmojis = [];");
-    httpd_resp_sendstr_chunk(req, "  ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked'].forEach(e => {");
+    httpd_resp_sendstr_chunk(req, "  ['happy','laughing','winking','cool','love','surprised','excited','sleepy','sad','angry','confused','thinking','neutral','shocked','silly'].forEach(e => {");
     httpd_resp_sendstr_chunk(req, "    if(document.getElementById('emoji_' + e) && document.getElementById('emoji_' + e).checked) selectedEmojis.push(e);");
     httpd_resp_sendstr_chunk(req, "  });");
     httpd_resp_sendstr_chunk(req, "}");
