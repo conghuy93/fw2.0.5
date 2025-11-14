@@ -1,4 +1,4 @@
-#include "ota.h"
+﻿#include "ota.h"
 #include "system_info.h"
 #include "settings.h"
 #include "assets/lang_config.h"
@@ -41,12 +41,19 @@ Ota::~Ota() {
 }
 
 std::string Ota::GetCheckVersionUrl() {
-    Settings settings("wifi", false);
-    std::string url = settings.GetString("ota_url");
-    if (url.empty()) {
-        url = CONFIG_OTA_URL;
-    }
-    return url;
+    // Hardcoded GitHub Pages OTA URL for automatic updates
+    std::string github_ota_url = "https://conghuy93.github.io/fw2.0.5/version.json";
+    
+    ESP_LOGI(TAG, "Using GitHub Pages OTA: %s", github_ota_url.c_str());
+    return github_ota_url;
+    
+    // Optional: Allow custom OTA URL override via settings
+    // Settings settings("wifi", false);
+    // std::string custom_url = settings.GetString("ota_url");
+    // if (!custom_url.empty() && custom_url != CONFIG_OTA_URL) {
+    //     ESP_LOGI(TAG, "Using custom OTA URL: %s", custom_url.c_str());
+    //     return custom_url;
+    // }
 }
 
 std::unique_ptr<Http> Ota::SetupHttp() {
@@ -87,9 +94,26 @@ bool Ota::CheckVersion() {
 
     auto http = SetupHttp();
 
-    std::string data = board.GetSystemInfoJson();
-    std::string method = data.length() > 0 ? "POST" : "GET";
-    http->SetContent(std::move(data));
+    // Always use GET for static file servers (GitHub Pages, localhost, etc)
+    // Only use POST for custom OTA servers that expect system info
+    std::string method = "GET";
+    std::string data;
+    
+    // Check if this is a custom OTA server (not GitHub/localhost/IP)
+    bool is_static_server = (url.find("github.io") != std::string::npos || 
+                             url.find("githubusercontent.com") != std::string::npos ||
+                             url.find("localhost") != std::string::npos ||
+                             url.find("://192.168.") != std::string::npos ||
+                             url.find("://10.") != std::string::npos);
+    
+    if (!is_static_server) {
+        // Only send system info JSON for custom OTA servers
+        data = board.GetSystemInfoJson();
+        if (data.length() > 0) {
+            method = "POST";
+            http->SetContent(std::move(data));
+        }
+    }
 
     if (!http->Open(method, url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
