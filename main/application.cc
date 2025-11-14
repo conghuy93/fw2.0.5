@@ -628,21 +628,22 @@ void Application::Start() {
                 }
                 
                 if (show_qr) {
-                    ESP_LOGI(TAG, "📱 QR keyword detected: showing winking emoji for 30s (no movement, no IP, no activation code)");
+                    ESP_LOGI(TAG, "📱 QR keyword detected: showing winking emoji for 15s (no movement, no IP, no activation code)");
                     // Lock emotion immediately so other actions cannot override during display period
                     emotion_locked_ = true;
+                    ESP_LOGI(TAG, "🔒 Emotion LOCKED for QR winking display");
                     Schedule([this]() {
                         if (auto disp = Board::GetInstance().GetDisplay()) {
                             // Show only winking emoji, no chat/status text
                             disp->SetEmotion("winking");
                         }
-                        // Unlock after 30 seconds
+                        // Unlock after 15 seconds
                         xTaskCreate([](void* arg) {
-                            vTaskDelay(pdMS_TO_TICKS(30000)); // 30s display duration
+                            vTaskDelay(pdMS_TO_TICKS(15000)); // Changed from 30s to 15s
                             Application* app = static_cast<Application*>(arg);
                             app->Schedule([app]() {
                                 app->emotion_locked_ = false;
-                                ESP_LOGI("Application", "🔓 Emotion UNLOCKED after QR winking display");
+                                ESP_LOGI("Application", "🔓 Emotion UNLOCKED after QR winking display (15s)");
                             });
                             vTaskDelete(NULL);
                         }, "qr_wink_unlock", 2048, this, 1, NULL);
