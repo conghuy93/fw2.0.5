@@ -1321,6 +1321,12 @@ void Application::SendSttMessage(const std::string& text) {
                   contains(lower, "hiển thị qr") || contains(lower, "hien thi qr") ||
                   contains(lower, "mở mạng qr") || contains(lower, "mo mang qr");
     
+    // Check for birthday celebration keywords
+    bool birthday_celebration = contains(lower, "chúc mừng sinh nhật") || contains(lower, "chuc mung sinh nhat") ||
+                               contains(lower, "happy birthday") || contains(lower, "sinh nhật") ||
+                               contains(lower, "sinh nhat") || contains(lower, "chúc mừng") ||
+                               contains(lower, "chuc mung");
+    
     if (show_qr) {
         ESP_LOGI(TAG, "🔒 QR CODE keyword detected - handling locally (no server send)");
         // Lock emotion IMMEDIATELY
@@ -1362,6 +1368,38 @@ void Application::SendSttMessage(const std::string& text) {
                     vTaskDelete(NULL);
                 }, "qr_unlock", 2048, this, 1, NULL);
             }
+        });
+        return; // Skip sending to server
+    }
+
+    // Handle birthday celebration keywords
+    if (birthday_celebration) {
+        ESP_LOGI(TAG, "🎂 BIRTHDAY keyword detected - showing Silly emoji for 15s");
+        // Lock emotion IMMEDIATELY
+        emotion_locked_ = true;
+        ESP_LOGI(TAG, "🔒 Emotion LOCKED for birthday celebration (Silly)");
+        
+        Schedule([this]() {
+            auto disp = Board::GetInstance().GetDisplay();
+            // Display user message first
+            disp->SetChatMessage("user", "Chúc mừng sinh nhật!");
+            
+            // Display Silly emotion for birthday celebration
+            disp->SetEmotion("Silly");
+            disp->SetChatMessage("system", "🎂 Chúc mừng sinh nhật! 🎂");
+            
+            ESP_LOGI(TAG, "🎂 Displaying Silly emoji for birthday celebration");
+            
+            // Unlock emotion after 15 seconds
+            xTaskCreate([](void* arg) {
+                vTaskDelay(pdMS_TO_TICKS(15000)); // 15 seconds display duration
+                Application* app = static_cast<Application*>(arg);
+                app->Schedule([app]() {
+                    app->emotion_locked_ = false;
+                    ESP_LOGI("Application", "🔓 Emotion UNLOCKED after birthday celebration");
+                });
+                vTaskDelete(NULL);
+            }, "birthday_unlock", 2048, this, 1, NULL);
         });
         return; // Skip sending to server
     }

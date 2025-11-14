@@ -776,6 +776,33 @@ public:
                                return true;
                            });
 
+        mcp_server.AddTool("self.birthday_celebration",
+                           "🎂 I celebrate birthdays with a silly face for 15 seconds! Use this when user says happy birthday or birthday wishes!\n"
+                           "This will display a playful Silly emoji for 15 seconds to celebrate birthdays.\n"
+                           "Example: 'Happy birthday!' or 'Chúc mừng sinh nhật' or 'Birthday celebration'",
+                           PropertyList(),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               ESP_LOGI(TAG, "🎂 MCP birthday tool called: showing Silly emoji for 15s");
+                               auto display = Board::GetInstance().GetDisplay();
+                               if (display) {
+                                   display->SetEmotion("Silly");
+                                   display->SetChatMessage("system", "🎂 Chúc mừng sinh nhật! 🎂");
+                                   ESP_LOGI(TAG, "🤪 Silly emoji set for birthday celebration");
+                               }
+                               // Create task to reset emotion after 15 seconds
+                               xTaskCreate([](void* arg) {
+                                   vTaskDelay(pdMS_TO_TICKS(15000)); // 15 seconds
+                                   auto disp = Board::GetInstance().GetDisplay();
+                                   if (disp) {
+                                       disp->SetEmotion("neutral");
+                                       disp->SetChatMessage("", "");
+                                   }
+                                   ESP_LOGI("OttoController", "🔓 Birthday celebration ended, emotion reset to neutral");
+                                   vTaskDelete(NULL);
+                               }, "birthday_reset", 2048, nullptr, 1, NULL);
+                               return true;
+                           });
+
         mcp_server.AddTool("self.show_ip",
                            "📱 I display my WiFi IP address on screen for 30 seconds! Use this when user asks for IP address, network info, or WiFi details!\n"
                            "This will show the device's current IP address with a happy emoji for 30 seconds.\n"
