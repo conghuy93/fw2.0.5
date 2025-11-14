@@ -1374,18 +1374,18 @@ void Application::SendSttMessage(const std::string& text) {
 
     // Handle birthday celebration keywords
     if (birthday_celebration) {
-        ESP_LOGI(TAG, "🎂 BIRTHDAY keyword detected - showing Silly emoji for 15s");
+        ESP_LOGI(TAG, "🎂 BIRTHDAY keyword detected - showing silly emoji for 15s");
         // Lock emotion IMMEDIATELY
         emotion_locked_ = true;
-        ESP_LOGI(TAG, "🔒 Emotion LOCKED for birthday celebration (Silly)");
+        ESP_LOGI(TAG, "🔒 Emotion LOCKED for birthday celebration (silly)");
         
         Schedule([this]() {
             auto disp = Board::GetInstance().GetDisplay();
             // Display user message first
             disp->SetChatMessage("user", "Chúc mừng sinh nhật!");
             
-            // Display Silly emotion for birthday celebration
-            disp->SetEmotion("Silly");
+            // Display silly emotion for birthday celebration
+            disp->SetEmotion("silly");
             disp->SetChatMessage("system", "🎂 Chúc mừng sinh nhật! 🎂");
             
             ESP_LOGI(TAG, "🎂 Displaying Silly emoji for birthday celebration");
