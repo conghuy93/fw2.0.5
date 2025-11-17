@@ -3,6 +3,7 @@
 
 #include "display.h"
 #include "lvgl_image.h"
+#include "qr_code_display.h"
 
 #include <lvgl.h>
 #include <esp_timer.h>
@@ -24,6 +25,8 @@ public:
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
     virtual bool SnapshotToJpeg(std::string& jpeg_data, int quality = 80);
+    virtual bool ShowQrCode(const char* text) override;
+    virtual void HideQrCode() override;
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;
@@ -43,6 +46,8 @@ protected:
 
     std::chrono::system_clock::time_point last_status_update_time_;
     esp_timer_handle_t notification_timer_ = nullptr;
+    
+    QrCodeDisplay qr_display_;
 
     friend class DisplayLockGuard;
     virtual bool Lock(int timeout_ms = 0) = 0;

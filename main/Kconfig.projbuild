@@ -4,7 +4,14 @@ config OTA_URL
     string "Default OTA URL"
     default "https://api.tenclass.net/xiaozhi/ota/"
     help
-        The application will access this URL to check for new firmwares and server address.
+        Default OTA server URL for firmware updates.
+        Priority: 1. NVS settings ("ota_url") → 2. This config → 3. Default value
+        
+        Examples:
+        - GitHub Pages: https://username.github.io/repo/version.json
+        - Custom server: https://your-server.com/ota/version.json
+        
+        Note: Can be overridden at runtime via NVS settings without reflashing.
 
 choice
     prompt "Flash Assets"

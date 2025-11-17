@@ -589,6 +589,11 @@ void Application::Start() {
                                    contains(lower, "tập thể dục") || contains(lower, "tap the duc") ||
                                    contains(lower, "hít đất") || contains(lower, "hit dat");
                 
+                // Birthday celebration keywords
+                bool birthday_voice = contains(lower, "chúc mừng sinh nhật") || contains(lower, "chuc mung sinh nhat") ||
+                                     contains(lower, "happy birthday") || contains(lower, "sinh nhật vui vẻ") ||
+                                     contains(lower, "sinh nhat vui ve");
+                
                 if (shoot_seq) {
                     ESP_LOGI(TAG, "🔫 EXECUTING shoot/defend sequence NOW! (No text display, only emoji)");
                     // Lock emotion IMMEDIATELY before Schedule
@@ -669,6 +674,34 @@ void Application::Start() {
                         otto_controller_queue_action(ACTION_DOG_TOILET, 3000, 150, 0, 0);
                     });
                     return; // handled
+                }
+                
+                if (birthday_voice) {
+                    ESP_LOGI(TAG, "🎂 VOICE BIRTHDAY trigger - showing silly emoji for 15s (emotion locked!)");
+                    // Lock emotion IMMEDIATELY before Schedule (same as shoot_seq)
+                    emotion_locked_ = true;
+                    ESP_LOGI(TAG, "🔒 Emotion LOCKED for birthday celebration (silly)");
+                    
+                    Schedule([this]() {
+                        auto disp = Board::GetInstance().GetDisplay();
+                        // Display silly emotion for birthday celebration
+                        disp->SetEmotion("silly");
+                        // No chat message here - let LLM respond naturally
+                        
+                        ESP_LOGI(TAG, "🎂 Displaying Silly emoji for birthday celebration (voice trigger)");
+                        
+                        // Unlock emotion after 15 seconds
+                        xTaskCreate([](void* arg) {
+                            vTaskDelay(pdMS_TO_TICKS(15000)); // 15 seconds display duration
+                            Application* app = static_cast<Application*>(arg);
+                            app->Schedule([app]() {
+                                app->emotion_locked_ = false;
+                                ESP_LOGI("Application", "🔓 Emotion UNLOCKED after birthday celebration (voice)");
+                            });
+                            vTaskDelete(NULL);
+                        }, "birthday_voice_unlock", 2048, this, 1, NULL);
+                    });
+                    // Don't return here - let LLM process and respond naturally
                 }
                 
                 // Instant action commands - execute immediately without LLM

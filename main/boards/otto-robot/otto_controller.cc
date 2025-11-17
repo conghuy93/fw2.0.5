@@ -778,16 +778,16 @@ public:
 
         mcp_server.AddTool("self.birthday_celebration",
                            "🎂 I celebrate birthdays with a silly face for 15 seconds! Use this when user says happy birthday or birthday wishes!\n"
-                           "This will display a playful Silly emoji for 15 seconds to celebrate birthdays.\n"
+                           "This will display a playful silly emoji for 15 seconds to celebrate birthdays.\n"
                            "Example: 'Happy birthday!' or 'Chúc mừng sinh nhật' or 'Birthday celebration'",
                            PropertyList(),
                            [this](const PropertyList& properties) -> ReturnValue {
-                               ESP_LOGI(TAG, "🎂 MCP birthday tool called: showing Silly emoji for 15s");
+                               ESP_LOGI(TAG, "🎂 MCP birthday tool called: showing silly emoji for 15s");
                                auto display = Board::GetInstance().GetDisplay();
                                if (display) {
-                                   display->SetEmotion("Silly");
+                                   display->SetEmotion("silly");
                                    display->SetChatMessage("system", "🎂 Chúc mừng sinh nhật! 🎂");
-                                   ESP_LOGI(TAG, "🤪 Silly emoji set for birthday celebration");
+                                   ESP_LOGI(TAG, "🤪 silly emoji set for birthday celebration");
                                }
                                // Create task to reset emotion after 15 seconds
                                xTaskCreate([](void* arg) {
@@ -867,31 +867,40 @@ public:
                                    ESP_LOGI(TAG, "🌐 Webserver already running");
                                }
                                
-                               // Display IP address with happy emoji for 15 seconds
+                               // Display control panel QR code
                                if (display) {
-                                   display->SetEmotion("happy");
-                                   
                                    // Get IP address
                                    esp_netif_ip_info_t ip_info;
                                    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
                                    if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
-                                       char ip_str[64];
-                                       snprintf(ip_str, sizeof(ip_str), "📱 IP: %d.%d.%d.%d", 
+                                       char url[128];
+                                       snprintf(url, sizeof(url), "http://%d.%d.%d.%d", 
                                                 IP2STR(&ip_info.ip));
-                                       ESP_LOGI(TAG, "🌟 Station IP: " IPSTR, IP2STR(&ip_info.ip));
-                                       display->SetChatMessage("system", ip_str);
+                                       ESP_LOGI(TAG, "🌟 Control panel URL: %s", url);
                                        
-                                       // Keep display for 15 seconds
+                                       // Show QR code with happy emoji for 30 seconds
+                                       display->SetEmotion("happy");
+                                       display->SetChatMessage("system", "📱 Scan mã QR để truy cập!");
+                                       
+                                       if (display->ShowQrCode(url)) {
+                                           ESP_LOGI(TAG, "📱 QR code displayed for control panel access");
+                                       } else {
+                                           ESP_LOGW(TAG, "⚠️ QR code display failed, showing URL instead");
+                                           display->SetChatMessage("system", url);
+                                       }
+                                       
+                                       // Keep display for 30 seconds
                                        xTaskCreate([](void* arg) {
-                                           vTaskDelay(pdMS_TO_TICKS(15000));
+                                           vTaskDelay(pdMS_TO_TICKS(30000));
                                            auto disp = Board::GetInstance().GetDisplay();
                                            if (disp) {
+                                               disp->HideQrCode();
                                                disp->SetEmotion("neutral");
                                                disp->SetChatMessage("", "");
                                            }
-                                           ESP_LOGI("OttoController", "🔓 IP display cleared after 15s");
+                                           ESP_LOGI("OttoController", "🔓 QR code cleared after 30s");
                                            vTaskDelete(NULL);
-                                       }, "mcp_panel_ip", 2048, nullptr, 1, NULL);
+                                       }, "mcp_panel_qr", 16384, nullptr, 1, NULL);
                                    } else {
                                        ESP_LOGE(TAG, "❌ Failed to get IP info");
                                        display->SetChatMessage("system", "✅ Web server đã khởi động!");

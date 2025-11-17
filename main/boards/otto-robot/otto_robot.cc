@@ -225,21 +225,22 @@ private:
     }
 
     void InitializeUdpDrawingService() {
-        ESP_LOGI(TAG, "🎨 Initializing UDP Drawing Service...");
+        // UDP Drawing Service - DISABLED
+        ESP_LOGI(TAG, "🎨 UDP Drawing Service: DISABLED");
         
         // Create DrawingDisplay (same size as main display)
-        drawing_display_ = std::make_unique<DrawingDisplay>(display_->width(), display_->height());
-        drawing_display_->StartDisplay();
+        // drawing_display_ = std::make_unique<DrawingDisplay>(display_->width(), display_->height());
+        // drawing_display_->StartDisplay();
         
         // Create UDP Drawing Service with drawing display and port 12345
-        udp_draw_service_ = std::make_unique<UdpDrawService>(drawing_display_.get(), 12345);
+        // udp_draw_service_ = std::make_unique<UdpDrawService>(drawing_display_.get(), 12345);
         
         // Set pointers for web UI access
-        otto_set_udp_draw_service(udp_draw_service_.get());
-        otto_set_drawing_display(drawing_display_.get());
+        // otto_set_udp_draw_service(udp_draw_service_.get());
+        // otto_set_drawing_display(drawing_display_.get());
         
-        ESP_LOGI(TAG, "✅ UDP Drawing Service initialized on port 12345");
-        ESP_LOGI(TAG, "📱 Service will start when WiFi connects");
+        // ESP_LOGI(TAG, "✅ UDP Drawing Service initialized on port 12345");
+        // ESP_LOGI(TAG, "📱 Service will start when WiFi connects");
     }
 
     void InitializeWebServer() {
@@ -374,12 +375,12 @@ public:
     virtual void StartNetwork() override {
         WifiBoard::StartNetwork();
         
-        // Start UDP Drawing Service sau khi WiFi connected
-        ESP_LOGI(TAG, "🎨 Starting UDP Drawing Service...");
-        if (udp_draw_service_ && udp_draw_service_->Start()) {
-            ESP_LOGI(TAG, "✅ UDP Drawing Service started on port 12345");
-            ESP_LOGI(TAG, "🎨 Drawing web UI: http://[IP]/draw");
-        }
+        // Start UDP Drawing Service sau khi WiFi connected - DISABLED
+        // ESP_LOGI(TAG, "🎨 Starting UDP Drawing Service...");
+        // if (udp_draw_service_ && udp_draw_service_->Start()) {
+        //     ESP_LOGI(TAG, "✅ UDP Drawing Service started on port 12345");
+        //     ESP_LOGI(TAG, "🎨 Drawing web UI: http://[IP]/draw");
+        // }
     }
 
 public:

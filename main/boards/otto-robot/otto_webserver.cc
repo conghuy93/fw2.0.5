@@ -502,18 +502,18 @@ void send_otto_control_page(httpd_req_t *req) {
     httpd_resp_sendstr_chunk(req, "</div>");
     httpd_resp_sendstr_chunk(req, "</div>");
     
-    // Touch Sensor Control Section
-    httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
-    httpd_resp_sendstr_chunk(req, "<div class='section-title'>🖐️ Cảm Biến Chạm TTP223</div>");
-    httpd_resp_sendstr_chunk(req, "<div class='mode-grid'>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setTouchSensor(true)' id='touch-on' style='background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border-color: #2e7d32; font-size: 16px; font-weight: bold;'>🖐️ BẬT Cảm Biến Chạm</button>");
-    httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setTouchSensor(false)' id='touch-off' style='background: linear-gradient(145deg, #f44336, #e57373); color: white; border-color: #c62828; font-size: 16px; font-weight: bold;'>🚫 TẮT Cảm Biến Chạm</button>");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
-    httpd_resp_sendstr_chunk(req, "Khi BẬT: chạm vào cảm biến → robot nhảy + emoji cười<br>");
-    httpd_resp_sendstr_chunk(req, "Khi TẮT: chạm vào cảm biến không có phản ứng");
-    httpd_resp_sendstr_chunk(req, "</div>");
-    httpd_resp_sendstr_chunk(req, "</div>");
+    // Touch Sensor Control Section - HIDDEN
+    // httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");
+    // httpd_resp_sendstr_chunk(req, "<div class='section-title'>🖐️ Cảm Biến Chạm TTP223</div>");
+    // httpd_resp_sendstr_chunk(req, "<div class='mode-grid'>");
+    // httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setTouchSensor(true)' id='touch-on' style='background: linear-gradient(145deg, #4caf50, #66bb6a); color: white; border-color: #2e7d32; font-size: 16px; font-weight: bold;'>🖐️ BẬT Cảm Biến Chạm</button>");
+    // httpd_resp_sendstr_chunk(req, "<button class='btn mode-btn' onclick='setTouchSensor(false)' id='touch-off' style='background: linear-gradient(145deg, #f44336, #e57373); color: white; border-color: #c62828; font-size: 16px; font-weight: bold;'>🚫 TẮT Cảm Biến Chạm</button>");
+    // httpd_resp_sendstr_chunk(req, "</div>");
+    // httpd_resp_sendstr_chunk(req, "<div style='text-align: center; margin-top: 10px; color: #666; font-size: 14px;'>");
+    // httpd_resp_sendstr_chunk(req, "Khi BẬT: chạm vào cảm biến → robot nhảy + emoji cười<br>");
+    // httpd_resp_sendstr_chunk(req, "Khi TẮT: chạm vào cảm biến không có phản ứng");
+    // httpd_resp_sendstr_chunk(req, "</div>");
+    // httpd_resp_sendstr_chunk(req, "</div>");
     
     // System Controls Section
     httpd_resp_sendstr_chunk(req, "<div class='movement-section'>");

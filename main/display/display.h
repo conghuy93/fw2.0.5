@@ -39,6 +39,8 @@ public:
     virtual Theme* GetTheme() { return current_theme_; }
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
+    virtual bool ShowQrCode(const char* text) { return false; }  // Override in subclass if supported
+    virtual void HideQrCode() {}  // Override in subclass if supported
     // TODO: virtual void SetMusicInfo(const char* song_name);
 
     inline int width() const { return width_; }

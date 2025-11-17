@@ -256,3 +256,15 @@ bool LvglDisplay::SnapshotToJpeg(std::string& jpeg_data, int quality) {
     return false;
 #endif
 }
+
+bool LvglDisplay::ShowQrCode(const char* text) {
+    DisplayLockGuard lock(this);
+    ESP_LOGI(TAG, "Showing QR code");
+    return qr_display_.Show(text, lv_screen_active());
+}
+
+void LvglDisplay::HideQrCode() {
+    DisplayLockGuard lock(this);
+    ESP_LOGI(TAG, "Hiding QR code");
+    qr_display_.Hide();
+}

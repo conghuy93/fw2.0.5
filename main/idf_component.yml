@@ -40,6 +40,7 @@ dependencies:
   espressif/esp_mmap_assets: '>=1.2'
   txp666/otto-emoji-gif-component: ~1.0.2
   espressif/adc_battery_estimation: ^0.2.0
+  espressif/qrcode: "^0.1.0"
 
   # Helix MP3 Decoder for music streaming
   chmorgan/esp-libhelix-mp3: "*"

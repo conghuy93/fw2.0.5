@@ -44,7 +44,7 @@ std::string Ota::GetCheckVersionUrl() {
     // Hardcoded GitHub Pages OTA URL for automatic updates
     std::string github_ota_url = "https://conghuy93.github.io/fw2.0.5/version.json";
     
-    ESP_LOGI(TAG, "Using GitHub Pages OTA: %s", github_ota_url.c_str());
+    ESP_LOGD(TAG, "Using GitHub Pages OTA: %s", github_ota_url.c_str());
     return github_ota_url;
     
     // Optional: Allow custom OTA URL override via settings
@@ -244,13 +244,13 @@ bool Ota::CheckVersion() {
     
     if (cJSON_IsObject(firmware)) {
         // Server format with nested "firmware" object
-        ESP_LOGI(TAG, "Using server OTA format");
+        ESP_LOGD(TAG, "Using server OTA format");
         version_node = cJSON_GetObjectItem(firmware, "version");
         url_node = cJSON_GetObjectItem(firmware, "url");
         force = cJSON_GetObjectItem(firmware, "force");
     } else {
         // GitHub Pages format with flat structure
-        ESP_LOGI(TAG, "Using GitHub Pages OTA format");
+        ESP_LOGD(TAG, "Using GitHub Pages OTA format");
         version_node = cJSON_GetObjectItem(root, "version");
         url_node = cJSON_GetObjectItem(root, "firmware_url");
         is_github_pages_format = true;
@@ -266,13 +266,17 @@ bool Ota::CheckVersion() {
     if (cJSON_IsString(version_node) && cJSON_IsString(url_node)) {
         // Check if the version is newer, for example, 0.1.0 is newer than 0.0.1
         has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
+        
+        ESP_LOGI(TAG, "📊 Version comparison: Current=%s, Remote=%s", current_version_.c_str(), firmware_version_.c_str());
+        
         if (has_new_version_) {
-            ESP_LOGI(TAG, "New version available: %s", firmware_version_.c_str());
+            ESP_LOGW(TAG, "🆕 New version available: %s -> %s", current_version_.c_str(), firmware_version_.c_str());
         } else {
-            ESP_LOGI(TAG, "Current is the latest version");
+            ESP_LOGI(TAG, "✅ Current version %s is up-to-date (remote: %s)", current_version_.c_str(), firmware_version_.c_str());
         }
         // If the force flag is set to 1, the given version is forced to be installed (server format only)
         if (!is_github_pages_format && cJSON_IsNumber(force) && force->valueint == 1) {
+            ESP_LOGW(TAG, "⚠️  Force upgrade flag detected, will upgrade even if versions match");
             has_new_version_ = true;
         }
     } else {
@@ -286,20 +290,38 @@ bool Ota::CheckVersion() {
 void Ota::MarkCurrentVersionValid() {
     auto partition = esp_ota_get_running_partition();
     if (strcmp(partition->label, "factory") == 0) {
-        ESP_LOGI(TAG, "Running from factory partition, skipping");
+        ESP_LOGI(TAG, "✅ Running from factory partition, skipping mark valid");
         return;
     }
 
-    ESP_LOGI(TAG, "Running partition: %s", partition->label);
+    ESP_LOGI(TAG, "📍 Running partition: %s", partition->label);
     esp_ota_img_states_t state;
     if (esp_ota_get_state_partition(partition, &state) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get state of partition");
+        ESP_LOGE(TAG, "❌ Failed to get state of partition");
         return;
     }
 
+    const char* state_str = 
+        (state == ESP_OTA_IMG_NEW) ? "NEW" :
+        (state == ESP_OTA_IMG_PENDING_VERIFY) ? "PENDING_VERIFY" :
+        (state == ESP_OTA_IMG_VALID) ? "VALID" :
+        (state == ESP_OTA_IMG_INVALID) ? "INVALID" :
+        (state == ESP_OTA_IMG_ABORTED) ? "ABORTED" : "UNKNOWN";
+    
+    ESP_LOGI(TAG, "🔍 Partition state: %s (%d)", state_str, state);
+
     if (state == ESP_OTA_IMG_PENDING_VERIFY) {
-        ESP_LOGI(TAG, "Marking firmware as valid");
-        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGW(TAG, "⚠️  Firmware in PENDING_VERIFY state, marking as VALID to prevent rollback");
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "✅ Firmware marked as VALID successfully");
+        } else {
+            ESP_LOGE(TAG, "❌ Failed to mark firmware valid: %s", esp_err_to_name(err));
+        }
+    } else if (state == ESP_OTA_IMG_VALID) {
+        ESP_LOGI(TAG, "✅ Firmware already marked as VALID");
+    } else {
+        ESP_LOGW(TAG, "⚠️  Unexpected partition state: %s", state_str);
     }
 }
 

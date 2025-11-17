@@ -120,6 +120,53 @@ Add new robot capabilities in `otto_controller.cc`:
 - Sensor integrations
 - External API connections
 
+## 🔒 OTA Security Configuration
+
+### Default Behavior (v2.0.8+)
+Firmware no longer hardcodes GitHub OTA URLs. Instead, uses a priority system:
+
+1. **NVS Settings** (Highest Priority) - Custom URL stored in device
+2. **Kconfig** - Compile-time configuration
+3. **Default** - Fallback to tenclass API
+
+### Setting Custom OTA URL
+
+**Option 1: Quick Script (Recommended)**
+```bash
+# Windows
+.\set_ota_url.ps1 -Url "https://your-server.com/ota/version.json"
+
+# Linux/Mac
+chmod +x set_ota_url.sh
+./set_ota_url.sh https://your-server.com/ota/version.json
+```
+
+**Option 2: Via Serial Monitor**
+```bash
+idf.py -p COM31 monitor
+
+# In monitor console:
+settings set ota_url "https://your-github.io/repo/version.json"
+settings save
+```
+
+**Option 3: Compile-Time Config**
+```bash
+idf.py menuconfig
+# Navigate: Xiaozhi Assistant → Default OTA URL
+# Change URL and save
+```
+
+### Verify Current URL
+Check device logs for:
+```
+📡 Using custom OTA URL from NVS: https://...
+⚙️ Using OTA URL from config: https://...
+🔧 Using default OTA URL: https://...
+```
+
+📚 **Full Security Guide**: [docs/SECURE_OTA_SETUP.md](docs/SECURE_OTA_SETUP.md)
+
 ## 📊 Performance
 
 - **Boot Time**: ~2 seconds to WiFi ready
