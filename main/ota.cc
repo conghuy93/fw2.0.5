@@ -398,15 +398,27 @@ bool Ota::Upgrade(const std::string& firmware_url) {
                     return false;
                 }
 
+                // Write the accumulated header data first
+                auto err = esp_ota_write(update_handle, image_header.data(), image_header.size());
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to write header data: %s", esp_err_to_name(err));
+                    esp_ota_abort(update_handle);
+                    return false;
+                }
+
                 image_header_checked = true;
                 std::string().swap(image_header);
+                continue; // Skip writing buffer again since header already contains this data
             }
         }
-        auto err = esp_ota_write(update_handle, buffer, ret);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to write OTA data: %s", esp_err_to_name(err));
-            esp_ota_abort(update_handle);
-            return false;
+        
+        if (image_header_checked) {
+            auto err = esp_ota_write(update_handle, buffer, ret);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to write OTA data: %s", esp_err_to_name(err));
+                esp_ota_abort(update_handle);
+                return false;
+            }
         }
     }
     http->Close();
