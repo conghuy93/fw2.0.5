@@ -229,18 +229,18 @@ private:
         ESP_LOGI(TAG, "🎨 UDP Drawing Service: DISABLED");
         
         // Create DrawingDisplay (same size as main display)
-        // drawing_display_ = std::make_unique<DrawingDisplay>(display_->width(), display_->height());
-        // drawing_display_->StartDisplay();
+        drawing_display_ = std::make_unique<DrawingDisplay>(display_->width(), display_->height());
+        drawing_display_->StartDisplay();
         
         // Create UDP Drawing Service with drawing display and port 12345
-        // udp_draw_service_ = std::make_unique<UdpDrawService>(drawing_display_.get(), 12345);
+        udp_draw_service_ = std::make_unique<UdpDrawService>(drawing_display_.get(), 12345);
         
         // Set pointers for web UI access
-        // otto_set_udp_draw_service(udp_draw_service_.get());
-        // otto_set_drawing_display(drawing_display_.get());
+        otto_set_udp_draw_service(udp_draw_service_.get());
+        otto_set_drawing_display(drawing_display_.get());
         
-        // ESP_LOGI(TAG, "✅ UDP Drawing Service initialized on port 12345");
-        // ESP_LOGI(TAG, "📱 Service will start when WiFi connects");
+        ESP_LOGI(TAG, "✅ UDP Drawing Service initialized on port 12345");
+        ESP_LOGI(TAG, "📱 Service will start when WiFi connects");
     }
 
     void InitializeWebServer() {

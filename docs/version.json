@@ -1,13 +1,13 @@
 {
     "firmware_url":  "https://conghuy93.github.io/fw2.0.5/firmware.bin",
-    "version":  "2.12",
-    "sha256":  "19830fef19c35c46c687e60b9de069a468960e142ceabc09974d9f5fe48e1a60",
-    "release_date":  "2025-11-18T21:35:00Z",
+    "version":  "2.13",
+    "sha256":  "7d961c31df6575123e30fa6022a6c30a55bf0eb8a58aafb398681138403fcc13",
+    "release_date":  "2025-11-18T21:42:00Z",
     "changelog":  [
-                      "Fix critical OTA bug - write header data before validation",
-                      "Add QR code display for control panel access",
-                      "Integrate espressif/qrcode library",
-                      "Create QrCodeDisplay class with LVGL canvas rendering"
+                      "Fix 503 Service Unavailable error on wakeup",
+                      "Initialize UDP Drawing Service and Drawing Display in otto_robot.cc",
+                      "Uncomment service initialization to enable web UI drawing features",
+                      "Fix critical OTA bug - write header data before validation"
                   ],
-    "size":  3860128
+    "size":  3861184
 }
