@@ -751,31 +751,6 @@ public:
                                return true;
                            });
 
-        mcp_server.AddTool("self.dog.wag_tail",
-                           "🐕🎉 I wag my tail like a super happy puppy! Make me wag my tail to show happiness!\n"
-                           "Args:\n"
-                           "  wags (1-10): How many times to wag my tail\n"
-                           "  speed (50-300ms): How fast I wag - lower is faster!\n"
-                           "Example: 'Otto, wag your tail!' or 'Vẫy đuôi đi!' or 'Show me you're happy!'",
-                           PropertyList({Property("wags", kPropertyTypeInteger, 5, 1, 10),
-                                         Property("speed", kPropertyTypeInteger, 100, 50, 300)}),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               int wags = properties["wags"].value<int>();
-                               int speed = properties["speed"].value<int>();
-                               ESP_LOGI(TAG, "🎉 Kiki is wagging tail happily!");
-                               // Set happy emoji
-                               if (auto display = Board::GetInstance().GetDisplay()) {
-                                   display->SetEmotion("happy");
-                               }
-                               // FAST RESPONSE: Execute immediately like esp-hi
-                               otto_.WagTail(wags, speed);
-                               // Reset emotion after
-                               if (auto display = Board::GetInstance().GetDisplay()) {
-                                   display->SetEmotion("neutral");
-                               }
-                               return true;
-                           });
-
         mcp_server.AddTool("self.show_qr",
                            "📱 I show a winking face for 30 seconds to display QR code! Use this when user asks to show QR code, activation code, or control panel access!\n"
                            "This will display a playful winking emoji for 30 seconds (no movement, no text).\n"

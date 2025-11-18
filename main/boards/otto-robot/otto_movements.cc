@@ -121,17 +121,11 @@ void Otto::ServoInit(int lf_angle, int rf_angle, int lb_angle, int rb_angle, int
     ServoAngleSet(SERVO_LB, lb_angle, 0);
     ServoAngleSet(SERVO_RB, rb_angle, 0);
     
-    // Initialize tail servo to center position (90 degrees)
-    if (servo_pins_[SERVO_TAIL] != -1) {
-        ServoAngleSet(SERVO_TAIL, 90, 0);
-        ESP_LOGI(TAG, "Tail servo initialized to center (90°)");
-    }
-    
     if (delay_time > 0) {
         vTaskDelay(pdMS_TO_TICKS(delay_time));
     }
     
-    ESP_LOGI(TAG, "Dog servo initialized - LF:%d RF:%d LB:%d RB:%d TAIL:90", 
+    ESP_LOGI(TAG, "Dog servo initialized - LF:%d RF:%d LB:%d RB:%d", 
              lf_angle, rf_angle, lb_angle, rb_angle);
 }
 
@@ -575,22 +569,20 @@ void Otto::WagTail(int wags, int speed_delay) {
         return;
     }
     
-    // Fixed wag count to prevent position drift - ignore wags parameter
-    const int FIXED_WAGS = 3;
-    ESP_LOGI(TAG, "🐕 Wagging tail (fixed %d times to prevent drift)", FIXED_WAGS);
+    ESP_LOGI(TAG, "🐕 Wagging tail %d times", wags);
     
-    // Save ACTUAL current tail position from hardware to restore exactly
-    int initial_position = servo_[SERVO_TAIL].GetPosition();
-    ESP_LOGI(TAG, "📍 Tail saved position: %d (will restore to this exact position)", initial_position);
-    
-    // Wag angles (relative to 90° center, but trim will be applied by ServoWrite)
+    // Center position for tail
     const int tail_center = 90;
     const int tail_left = 30;    // Increased swing angle: was 45, now 30 (more left)
     const int tail_right = 150;  // Increased swing angle: was 135, now 150 (more right)
     
-    // Wag left and right exactly 3 times (fixed count)
-    for (int wag_count = 0; wag_count < FIXED_WAGS; wag_count++) {
-        ESP_LOGI(TAG, "Wag %d/%d", wag_count + 1, FIXED_WAGS);
+    // Reset to center first
+    ServoAngleSet(SERVO_TAIL, tail_center, 0);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    // Wag left and right
+    for (int wag_count = 0; wag_count < wags; wag_count++) {
+        ESP_LOGI(TAG, "Wag %d", wag_count + 1);
         
         // Wag to right
         ServoAngleSet(SERVO_TAIL, tail_right, 0);
@@ -601,12 +593,9 @@ void Otto::WagTail(int wags, int speed_delay) {
         vTaskDelay(pdMS_TO_TICKS(speed_delay));
     }
     
-    // CRITICAL FIX: Restore to EXACT initial position instead of generic "90"
-    // This prevents drift caused by trim/compensation accumulation
-    servo_[SERVO_TAIL].SetPosition(initial_position);
-    vTaskDelay(pdMS_TO_TICKS(400));  // Extra time to ensure servo reaches exact position
-    
-    ESP_LOGI(TAG, "🐕 Tail wag completed, restored to exact position: %d", initial_position);
+    // Return to center
+    ServoAngleSet(SERVO_TAIL, tail_center, 0);
+    ESP_LOGI(TAG, "🐕 Tail wag completed");
 }
 
 //-- Dog Roll Over (new movement - lăn qua lăn lại)
