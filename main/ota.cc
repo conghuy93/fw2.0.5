@@ -44,7 +44,7 @@ std::string Ota::GetCheckVersionUrl() {
     // Hardcoded GitHub Pages OTA URL for automatic updates
     std::string github_ota_url = "https://conghuy93.github.io/fw2.0.5/version.json";
     
-    ESP_LOGD(TAG, "Using GitHub Pages OTA: %s", github_ota_url.c_str());
+    ESP_LOGI(TAG, "Using GitHub Pages OTA: %s", github_ota_url.c_str());
     return github_ota_url;
     
     // Optional: Allow custom OTA URL override via settings
@@ -244,13 +244,13 @@ bool Ota::CheckVersion() {
     
     if (cJSON_IsObject(firmware)) {
         // Server format with nested "firmware" object
-        ESP_LOGD(TAG, "Using server OTA format");
+        ESP_LOGI(TAG, "Using server OTA format");
         version_node = cJSON_GetObjectItem(firmware, "version");
         url_node = cJSON_GetObjectItem(firmware, "url");
         force = cJSON_GetObjectItem(firmware, "force");
     } else {
         // GitHub Pages format with flat structure
-        ESP_LOGD(TAG, "Using GitHub Pages OTA format");
+        ESP_LOGI(TAG, "Using GitHub Pages OTA format");
         version_node = cJSON_GetObjectItem(root, "version");
         url_node = cJSON_GetObjectItem(root, "firmware_url");
         is_github_pages_format = true;
